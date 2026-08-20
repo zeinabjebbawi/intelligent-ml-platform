@@ -34,23 +34,40 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
-    'datasets',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # third party
+    'rest_framework',
+    'corsheaders',
+    'rest_framework_simplejwt',
+    # our apps
+    'accounts',
+    'projects',
+    'datasets',
+    'experiments',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+# CorsMiddleware must sit as high as possible in the list (right after
+# SecurityMiddleware) so it can attach CORS headers before any other
+# middleware has a chance to reject or redirect the request.
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',   # React (Vite dev server)
+    'http://localhost:3000',   # React, if ever run on the CRA-style port instead
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -87,6 +104,35 @@ DATABASES = {
     }
 
 }
+
+
+# ─── JWT Configuration ───────────────────────────────────────────
+# This tells Django REST Framework to use JWT for authentication.
+# Every protected endpoint will require the header: Authorization: Bearer <token>
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),   # token is valid for 24 hours
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    # refresh token valid 7 days
+    'ROTATE_REFRESH_TOKENS': True,                  # issue new refresh token each time
+    'AUTH_HEADER_TYPES': ('Bearer',),               # "Bearer <token>" format
+}
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    # By default, every endpoint requires login unless marked AllowAny
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+# ─── File Storage Configuration ──────────────────────────────────
+# MEDIA_ROOT: the folder on disk where uploaded CSV files will be saved
+# MEDIA_URL: the URL prefix to access those files in the browser
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = '/media/'
 
 
 # Password validation

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IntelliML — Full Architecture Deep Dive</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#1B2A6B;--teal:#0F6E56;--amber:#854F0B;--blue:#0277BD;--coral:#993C1D;--purple:#3C3489;--bg:#FAFAFA;--border:#e0e0e0;--text:#1a1a1a;--muted:#666}
+body{font-family:'Times New Roman',Times,serif;font-size:12.5pt;line-height:1.75;color:var(--text);background:var(--bg);padding:32px 24px}
+.page{max-width:880px;margin:0 auto}
+.doc-header{text-align:center;padding:32px 0 24px;border-bottom:3px solid var(--navy);margin-bottom:28px}
+.doc-header h1{font-size:21pt;color:var(--navy);margin-bottom:6px}
+.doc-header p{color:var(--muted);font-style:italic;font-size:11.5pt}
+.toc{background:#f0f4ff;border:1px solid var(--border);border-radius:8px;padding:16px 22px;margin-bottom:40px}
+.toc h2{font-size:12pt;color:var(--navy);margin-bottom:10px}
+.toc ol{padding-left:20px;font-size:11pt}
+.toc li{margin-bottom:4px}
+.toc a{color:var(--blue);text-decoration:none}
+.section{margin-bottom:46px}
+.section-title{font-size:15pt;font-weight:700;color:var(--navy);border-bottom:2px solid var(--navy);padding-bottom:7px;margin-bottom:16px}
+.section-sub{font-size:12.5pt;font-weight:700;color:var(--teal);margin:18px 0 8px}
+p{margin-bottom:12px;text-align:justify}
+ul,ol{margin:0 0 12px 22px}
+li{margin-bottom:6px}
+.analogy{background:#e8f5e9;border-left:5px solid var(--teal);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.analogy .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--teal);margin-bottom:4px}
+.info{background:#e3f2fd;border-left:5px solid var(--blue);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.info .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--blue);margin-bottom:4px}
+.warn{background:#fff3e0;border-left:5px solid var(--amber);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.warn .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--amber);margin-bottom:4px}
+.danger{background:#fdecea;border-left:5px solid var(--coral);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.danger .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--coral);margin-bottom:4px}
+code{font-family:'Courier New',monospace;font-size:9.5pt;background:#f0f0f8;padding:1px 5px;border-radius:3px}
+.code-block{background:#0f1117;border-radius:8px;padding:14px 18px;margin:12px 0;overflow-x:auto;font-family:'Courier New',monospace;font-size:9.5pt;line-height:1.65;color:#e2e8f0;white-space:pre}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:10.8pt}
+th{background:var(--navy);color:white;padding:8px 12px;text-align:left}
+td{padding:8px 12px;border:1px solid var(--border);vertical-align:top}
+tr:nth-child(even) td{background:#f0f4ff}
+.diagram{background:#0f1117;color:#e2e8f0;border-radius:8px;padding:18px 22px;margin:14px 0;font-family:'Courier New',monospace;font-size:10pt;line-height:1.8;white-space:pre;overflow-x:auto}
+.step{border:1.5px solid var(--border);border-radius:8px;margin-bottom:14px;overflow:hidden}
+.step-h{background:#f8f9ff;padding:8px 16px;font-weight:700;color:var(--navy);border-bottom:1px solid var(--border);font-size:11pt}
+.step-b{padding:12px 16px;font-size:11.3pt}
+.step-b p{margin-bottom:6px}
+@media print{body{background:white;padding:16px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="doc-header">
+  <h1>IntelliML — Full Architecture Deep Dive</h1>
+  <p>Everything about how this project fits together, written for someone seeing it for the first time</p>
+</div>
+
+<div class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#big-picture">The Big Picture — four pieces, one system</a></li>
+    <li><a href="#backends-connect">How the two backends connect (Django ↔ FastAPI)</a></li>
+    <li><a href="#frontend-connect">How the frontend connects to both backends</a></li>
+    <li><a href="#database">The database — apps, models, migrations</a></li>
+    <li><a href="#jwt">Authentication and JWT, explained fully</a></li>
+    <li><a href="#cors">CORS — what it is and exactly what's configured</a></li>
+    <li><a href="#pipeline">The complete pipeline: CSV upload to final result</a></li>
+    <li><a href="#env">Environment variables and secrets</a></li>
+    <li><a href="#running">Running everything, day to day</a></li>
+    <li><a href="#filemap">Project file map</a></li>
+    <li><a href="#pitfalls">Things worth knowing — beginner pitfalls</a></li>
+  </ol>
+</div>
+
+<!-- 1 -->
+<div class="section" id="big-picture">
+  <div class="section-title">1 — The Big Picture: Four Pieces, One System</div>
+  <p>IntelliML is not one program. It is four separate programs that talk to each other over HTTP. Each one only knows how to do its own job, and none of them knows how the others are built internally — they only know each other's addresses and what JSON to send.</p>
+
+  <div class="diagram">┌─────────────┐        ┌──────────────┐        ┌──────────────┐
+│   React     │  HTTP  │    Django    │  HTTP  │   FastAPI    │
+│ (port 5173) │◄──────►│ (port 8080)  │◄──────►│ (port 8001)  │
+│  frontend   │        │  app server  │        │  ML engine   │
+└─────────────┘        └──────┬───────┘        └──────┬───────┘
+                               │                       │
+                               ▼                       ▼
+                        ┌─────────────┐        ┌──────────────┐
+                        │ PostgreSQL  │        │   ml-core    │
+                        │  database   │        │ (plain .py   │
+                        └─────────────┘        │  functions)  │
+                                                └──────────────┘</div>
+
+  <table>
+    <tr><th>Piece</th><th>Technology</th><th>Job</th></tr>
+    <tr><td><strong>React</strong></td><td>Vite + React 19</td><td>Everything the user sees and clicks. Never talks to the database directly — only to Django and FastAPI.</td></tr>
+    <tr><td><strong>Django</strong></td><td>Django 6 + DRF + SimpleJWT</td><td>Accounts, login, projects, file upload, and the PostgreSQL database. The "business layer."</td></tr>
+    <tr><td><strong>FastAPI</strong></td><td>FastAPI + Uvicorn</td><td>All machine learning computation. Never touches PostgreSQL directly.</td></tr>
+    <tr><td><strong>ml-core</strong></td><td>Plain Python + pandas/scikit-learn</td><td>Not a server — a folder of importable functions (<code>cleaning.py</code>, <code>models.py</code>, <code>evaluation.py</code>, <code>pipelines.py</code>). Only FastAPI imports it.</td></tr>
+  </table>
+
+  <div class="analogy">
+    <div class="label">Why split it this way?</div>
+    Django is the building manager — it handles accounts, stores files, keeps records, controls who gets in. FastAPI is the specialized lab technician down the hall — it only does scientific computation, and it does it fast because it never has to think about logins or file storage. The lab technician doesn't keep patient records; the building manager doesn't run lab tests. Each does one job well, and they hand work to each other. This is what "separation of concerns" means — not one giant tangled program, but boxes with narrow, well-defined openings between them.
+  </div>
+
+  <p>Why does this matter practically? Because <code>ml-core</code> depends on heavy packages (numpy, pandas, scikit-learn, scipy) that Django's world has no reason to carry. Keeping ML code physically separate from Django means Django stays small and fast for what it does (auth, database, files), and the ML engine can be scaled, restarted, or even replaced independently without touching a single line of login code.</p>
+</div>
+
+<!-- 2 -->
+<div class="section" id="backends-connect">
+  <div class="section-title">2 — How the Two Backends Connect (Django ↔ FastAPI)</div>
+  <p>Django and FastAPI are two completely separate processes, each with its <strong>own virtual environment (venv)</strong>, listening on different ports (8080 and 8001). They do not share memory, they do not import each other's code, and they do not know the other one exists except by network address. The only way they communicate is by sending each other plain HTTP requests — exactly like a browser would.</p>
+
+  <p>Concretely: when a user uploads a CSV, Django's <code>DatasetUploadView</code> (in <code>backend-django/datasets/views.py</code>) saves the file to disk, creates a <code>Dataset</code> row in PostgreSQL, and then — using Python's <code>requests</code> library, the same one you'd use to call any external API — sends a POST request to <code>http://localhost:8001/ml/profile</code> with the file's path. FastAPI receives that request, loads the CSV using <code>ml-core</code>'s <code>load_data()</code> and <code>profile_dataset()</code>, and sends back a JSON response full of statistics. Django reads that response and saves it into the same <code>Dataset</code> row.</p>
+
+  <div class="code-block">django  --POST /ml/profile-->  fastapi
+        {file_path: "..."}
+
+django  <--200 OK {profiling_result, health_score}--  fastapi</div>
+
+  <div class="warn">
+    <div class="label">The most important defensive pattern in this project</div>
+    That call is wrapped in a <code>try/except</code>. If FastAPI is not running, Django does not crash — the upload still succeeds, the dataset is saved with <code>status='uploaded'</code> instead of <code>'profiled'</code>, and the response tells the user to start the FastAPI server. One service being down never brings the other one down. This is the single most important resilience pattern in the whole backend — remember it, because you will reuse the exact same shape (<code>try / except ConnectionError / except Exception</code>) everywhere Django calls FastAPI in the future.
+  </div>
+
+  <p><strong>Why two separate venvs instead of one?</strong> A venv (virtual environment) is an isolated folder of installed Python packages, so one project's dependencies don't collide with another's. Django's venv (<code>backend-django/.venv</code>) has Django, DRF, psycopg2, and — because Django's own upload view needs it to call FastAPI — the <code>requests</code> library. FastAPI's venv (<code>backend-fastapi/.venv</code>) has FastAPI, Uvicorn, and the entire ML stack (numpy, pandas, scikit-learn, scipy) that <code>ml-core</code> needs. Neither venv needs the other's packages, so keeping them separate keeps each install lean and keeps a dependency conflict in one from ever breaking the other.</p>
+
+  <div class="section-sub">How FastAPI finds <code>ml-core</code></div>
+  <p><code>ml-core</code> is not installed as a normal package — it's a plain folder of <code>.py</code> files sitting at the project root, next to (not inside) <code>backend-fastapi</code>. For <code>main.py</code> to write <code>from cleaning import load_data</code>, Python has to be told where to look. The top of <code>main.py</code> does exactly that:</p>
+  <div class="code-block">ML_CORE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'ml-core'
+)
+sys.path.insert(0, ML_CORE_PATH)</div>
+  <p>In plain words: "take this file's own folder (<code>backend-fastapi</code>), go up one level to the project root, then look inside <code>ml-core</code>." That folder is added to Python's search path, so every <code>from cleaning import ...</code> / <code>from models import ...</code> / etc. in <code>main.py</code> now resolves correctly. There is also a <code>setup.py</code> in <code>ml-core/</code> that lets you run <code>pip install -e .</code> from inside it (with the FastAPI venv active) to make the same four modules importable from anywhere — both mechanisms are in place, and either one alone is enough.</p>
+</div>
+
+<!-- 3 -->
+<div class="section" id="frontend-connect">
+  <div class="section-title">3 — How the Frontend Connects to Both Backends</div>
+  <p>React never touches ml-core or PostgreSQL. It only ever makes HTTP requests — to Django for anything about accounts/projects/files, and to FastAPI for anything about ML computation. All of that is centralized in one file: <code>frontend/src/api.js</code>.</p>
+
+  <div class="code-block">export const djangoAPI = axios.create({ baseURL: 'http://localhost:8080' })
+export const mlAPI     = axios.create({ baseURL: 'http://localhost:8001' })</div>
+
+  <p>Two separate <code>axios</code> instances, one per backend. Every component imports pre-built functions from this file (<code>authAPI.login(...)</code>, <code>mlOpsAPI.profile(...)</code>) instead of writing raw <code>axios.post(url, ...)</code> calls scattered across the codebase. This means if a URL or a required field ever changes, it's fixed in exactly one place.</p>
+
+  <div class="section-sub">The JWT interceptor</div>
+  <p><code>djangoAPI</code> has an interceptor — a function that runs automatically before every single outgoing request — that reads the access token from <code>localStorage</code> and attaches it as an <code>Authorization: Bearer &lt;token&gt;</code> header:</p>
+  <div class="code-block">djangoAPI.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})</div>
+  <p>This is why, after calling <code>authAPI.login(...)</code> once and saving the returned token to <code>localStorage</code>, every later call through <code>djangoAPI</code> (creating a project, uploading a file) is automatically authenticated — no component ever manually attaches the header itself. <code>mlAPI</code> deliberately has no such interceptor, because FastAPI's endpoints in this project do not require a login token — only Django's do.</p>
+</div>
+
+<!-- 4 -->
+<div class="section" id="database">
+  <div class="section-title">4 — The Database: Apps, Models, Migrations</div>
+  <p>The database is PostgreSQL, and Django is the <em>only</em> piece of the system allowed to talk to it directly. FastAPI never opens a database connection — it only ever receives data (a file path) and returns data (a JSON dict). This is deliberate: it keeps a single source of truth for "who can write to the database," which makes debugging vastly simpler.</p>
+
+  <div class="section-sub">The four Django apps</div>
+  <table>
+    <tr><th>App</th><th>Models</th><th>Responsibility</th></tr>
+    <tr><td><code>accounts</code></td><td><code>UserProfile</code></td><td>Extends Django's built-in <code>User</code> with experience level (beginner/expert) and onboarding status.</td></tr>
+    <tr><td><code>projects</code></td><td><code>Project</code>, <code>WorkflowState</code></td><td>A workspace per analysis. <code>WorkflowState</code> tracks which step of the journey map the user is on.</td></tr>
+    <tr><td><code>datasets</code></td><td><code>Dataset</code>, <code>DatasetVersion</code></td><td>An uploaded CSV and every processed version of it (original → cleaned → encoded → normalized).</td></tr>
+    <tr><td><code>experiments</code></td><td><code>Experiment</code>, <code>AgentDecision</code>, <code>InsightCard</code>, <code>WhatIfSimulation</code>, <code>Report</code></td><td>One training run, every decision the agent made, every generated insight, every saved simulation, every report.</td></tr>
+  </table>
+
+  <p>Why UUIDs instead of auto-incrementing numbers for primary keys? Because <code>/api/projects/1/</code> invites someone to simply try <code>/api/projects/2/</code>. A UUID like <code>/api/projects/3a7b9c1d-.../</code> is unguessable — you cannot enumerate other people's data by changing a number in the URL.</p>
+
+  <p>Why <code>JSONField</code> for things like <code>profiling_result</code>, <code>metrics</code>, and <code>step_data</code>? Because their shape genuinely varies — a classification experiment's metrics dict has <code>accuracy</code>/<code>f1_score</code>; a regression one has <code>rmse</code>/<code>r2</code>; a clustering one has <code>silhouette_score</code>. Modeling every possible field as its own database column would mean dozens of always-empty columns and a new migration every time a new metric is added. PostgreSQL stores <code>JSONField</code> as JSONB — indexed and queryable — so this flexibility costs nothing in practice.</p>
+
+  <div class="section-sub">Migrations — what they actually are</div>
+  <p>Writing a model class in <code>models.py</code> changes nothing about the real database by itself — it's just Python. A <strong>migration</strong> is a generated file that describes the exact SQL needed to make the real database match your models. Two commands, always in this order:</p>
+  <div class="code-block">python manage.py makemigrations   # reads models.py, writes a migration file (a "recipe")
+python manage.py migrate          # actually runs that recipe against PostgreSQL</div>
+  <div class="danger">
+    <div class="label">The rule you must never break</div>
+    Every time you add, remove, or change a field on any model, you must run <code>makemigrations</code> then <code>migrate</code> again. Skip this and your Python code and your real database silently disagree about what columns exist — the app will crash the moment it touches that model, usually with a confusing <code>ProgrammingError: column does not exist</code>.
+  </div>
+</div>
+
+<!-- 5 -->
+<div class="section" id="jwt">
+  <div class="section-title">5 — Authentication and JWT, Explained Fully</div>
+  <p>JWT stands for JSON Web Token. It is how Django knows who is making a request without asking for a password on every single click.</p>
+
+  <div class="step">
+    <div class="step-h">Step 1 — Register</div>
+    <div class="step-b"><p><code>POST /api/auth/register/</code> with an email and password. Django hashes the password (it is <strong>never</strong> stored in plain text — <code>User.objects.create_user()</code> does this automatically) and creates a <code>User</code> row. The <code>post_save</code> signal in <code>accounts/models.py</code> then automatically creates a matching <code>UserProfile</code> row.</p></div>
+  </div>
+  <div class="step">
+    <div class="step-h">Step 2 — Login</div>
+    <div class="step-b"><p><code>POST /api/auth/login/</code> with the same email/password. SimpleJWT checks the password against the stored hash and, if correct, returns two tokens: an <strong>access token</strong> and a <strong>refresh token</strong>.</p></div>
+  </div>
+  <div class="step">
+    <div class="step-h">Step 3 — Using the access token</div>
+    <div class="step-b"><p>Every future request to a protected endpoint (like creating a project) must include <code>Authorization: Bearer &lt;access_token&gt;</code>. DRF's <code>JWTAuthentication</code> decodes the token, verifies its signature (proving it really came from this server and wasn't tampered with), and sets <code>request.user</code> to the matching user — all before your view function even runs.</p></div>
+  </div>
+  <div class="step">
+    <div class="step-h">Step 4 — Expiry and refresh</div>
+    <div class="step-b"><p>In this project's <code>SIMPLE_JWT</code> settings: the access token lasts <strong>24 hours</strong>, the refresh token lasts <strong>7 days</strong>. Once the access token expires, the frontend sends the refresh token to <code>POST /api/auth/token/refresh/</code> to get a new access token — without asking the user to log in again. <code>ROTATE_REFRESH_TOKENS: True</code> means every refresh also issues a brand-new refresh token, which is a security best practice (an old, possibly-stolen refresh token stops working once a new one is issued).</p></div>
+  </div>
+
+  <div class="analogy">
+    <div class="label">Simple analogy</div>
+    A JWT is like a wristband at a festival. Security (login) checks your ID once at the gate and puts on the wristband. For the rest of the day, every stage's bouncer just glances at the wristband — they don't re-check your ID every time. The wristband has an expiry printed on it (24 hours here); once it's expired, you need a new one (the refresh step), but you don't need to show your ID card again, just your ticket stub (the refresh token).
+  </div>
+
+  <p>Note: in this codebase, Django's <code>username</code> field is set to the user's email during registration (<code>User.objects.create_user(username=email, ...)</code>) — this is why the login request body uses the key <code>username</code> even though what you actually type in is an email address.</p>
+</div>
+
+<!-- 6 -->
+<div class="section" id="cors">
+  <div class="section-title">6 — CORS: What It Is, and Exactly What's Configured</div>
+  <p>CORS (Cross-Origin Resource Sharing) is a browser security rule, not a server rule. By default, a browser refuses to let JavaScript running on one origin (say, <code>http://localhost:5173</code>) read the response from a request to a different origin (<code>http://localhost:8080</code>) — even though the two are both "localhost," a different <em>port</em> counts as a different origin. Without any configuration, React's calls to Django and FastAPI would be silently blocked by the browser, even if the server responded successfully.</p>
+
+  <p>The server fixes this by explicitly telling the browser, via response headers, "requests from this specific origin are allowed." Both backends do this, but with different tools:</p>
+
+  <table>
+    <tr><th>Backend</th><th>Tool</th><th>Configured origins</th></tr>
+    <tr><td>Django</td><td><code>django-cors-headers</code> (<code>CorsMiddleware</code>)</td><td><code>http://localhost:5173</code>, <code>http://localhost:3000</code></td></tr>
+    <tr><td>FastAPI</td><td>Starlette's built-in <code>CORSMiddleware</code></td><td><code>http://localhost:5173</code>, <code>http://localhost:3000</code>, <code>http://localhost:8080</code></td></tr>
+  </table>
+
+  <div class="warn">
+    <div class="label">A gap that existed until this pass, now fixed</div>
+    <code>corsheaders</code> was added to Django's <code>INSTALLED_APPS</code> early on, but the middleware itself was never wired into <code>MIDDLEWARE</code>, and <code>CORS_ALLOWED_ORIGINS</code> was never set. That meant Django was silently rejecting cross-origin requests from React this whole time — it just never surfaced because nothing was calling Django from a browser yet. This is now fixed in <code>core/settings.py</code>: <code>CorsMiddleware</code> sits right after <code>SecurityMiddleware</code> (it must run early, before other middleware can reject the request), and the two dev origins are explicitly allowlisted.
+  </div>
+
+  <p>One more detail worth knowing: for any "unsafe" request (POST, PUT, DELETE, or a GET with custom headers like <code>Authorization</code>), the browser first sends an invisible <strong>preflight</strong> request using the <code>OPTIONS</code> method, asking "am I allowed to make this real request?" before it sends the real one. That's what <code>CorsMiddleware</code>/<code>CORSMiddleware</code> are answering. You will never write this OPTIONS request yourself — the browser does it automatically, and you'll only ever notice it exists by seeing it appear in your browser's Network tab.</p>
+</div>
+
+<!-- 7 -->
+<div class="section" id="pipeline">
+  <div class="section-title">7 — The Complete Pipeline: CSV Upload to Final Result</div>
+  <p>This traces one dataset through the entire system, file by file, function by function.</p>
+
+  <div class="step">
+    <div class="step-h">1. Upload</div>
+    <div class="step-b">
+      <p>React calls <code>datasetsAPI.upload(projectId, formData)</code> → <code>POST /api/projects/&lt;id&gt;/datasets/upload/</code> on Django.</p>
+      <p><code>DatasetUploadView</code> (in <code>backend-django/datasets/views.py</code>) verifies the project belongs to the logged-in user, saves the file to <code>media/datasets/user_&lt;id&gt;/project_&lt;id&gt;/original.csv</code>, reads it with pandas for a quick preview, and creates a <code>Dataset</code> row (status <code>'uploaded'</code>) plus a <code>DatasetVersion</code> row (version 1, type <code>'original'</code>).</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h">2. The Django → FastAPI bridge fires</div>
+    <div class="step-b">
+      <p>Still inside the same request, Django POSTs the saved file path to FastAPI's <code>/ml/profile</code>. FastAPI calls <code>load_data()</code> then <code>profile_dataset()</code> from <code>ml-core/cleaning.py</code>, which computes column statistics, outlier counts, correlations, class imbalance, and the 0–100 health score, and returns it all as JSON.</p>
+      <p>Django saves that JSON into <code>Dataset.profiling_result</code> and the overall score into <code>Dataset.health_score</code>, and flips <code>status</code> to <code>'profiled'</code>. If FastAPI didn't respond (not running), none of this happens, but the upload itself still succeeded — the frontend is told profiling isn't done yet.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h">3. Diagnose page</div>
+    <div class="step-b">
+      <p>React reads the dataset via <code>datasetsAPI.get(datasetId)</code> and renders the health score gauge, column cards, and correlation heatmap directly from <code>profiling_result</code> — no new computation needed, it was already stored in step 2.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h">4a. Smart Auto mode</div>
+    <div class="step-b">
+      <p>React calls <code>mlOpsAPI.autoPipeline(...)</code> → FastAPI's <code>/ml/auto</code> → <code>run_auto_pipeline()</code> in <code>ml-core/pipelines.py</code>. This one function call auto-detects the task type, auto-cleans the data (<code>auto_clean()</code>), encodes categoricals, splits/scales, runs every recommended algorithm through <code>run_tournament()</code>, evaluates the winner, saves the model + scaler to disk, and returns everything — including an <code>agent_decisions</code> list that becomes the transparency log shown to the user.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h">4b. Guided Expert mode (the alternative path)</div>
+    <div class="step-b">
+      <p>Instead of one big automatic call, React calls <code>/ml/clean/step</code> once per cleaning decision the user approves (<code>run_cleaning_step()</code> — fill one column, remove one set of outliers, etc.), then once the user is satisfied, calls <code>/ml/train</code> (<code>run_full_pipeline()</code>) with the specific algorithm they picked, or <code>'tournament'</code> to compare several.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h">5. Results page</div>
+    <div class="step-b">
+      <p>Whichever mode ran, the response includes <code>metrics</code>, <code>feature_importance</code>, and (for classification) the confusion matrix — all computed by <code>evaluation.py</code>'s functions and already JSON-safe (no raw NaN or numpy types leak through, by design). React renders charts directly from this data; it never computes a metric itself.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-h">6. What-If Simulator</div>
+    <div class="step-b">
+      <p>Every time the user drags a slider, React calls <code>mlOpsAPI.whatIfPredict(...)</code> and <code>whatIfContributions(...)</code> → FastAPI loads the saved model + scaler from disk (<code>predict_what_if()</code>, <code>get_feature_contributions()</code>), scales the new input values <em>using the exact same scaler fitted during training</em>, and returns a prediction with confidence and per-feature contribution percentages. This must stay fast because it fires on every slider movement.</p>
+    </div>
+  </div>
+</div>
+
+<!-- 8 -->
+<div class="section" id="env">
+  <div class="section-title">8 — Environment Variables and Secrets</div>
+  <p>Two separate <code>.env</code> files exist, one per backend, and neither is ever committed to git (both are listed in <code>.gitignore</code>, along with <code>.venv/</code> and <code>node_modules/</code>):</p>
+  <table>
+    <tr><th>File</th><th>Contains</th></tr>
+    <tr><td><code>backend-django/.env</code></td><td><code>DB_NAME</code>, <code>DB_USER</code>, <code>DB_PASSWORD</code>, <code>DB_HOST</code>, <code>DB_PORT</code> — your real PostgreSQL credentials.</td></tr>
+    <tr><td><code>backend-fastapi/.env</code></td><td><code>DEEPSEEK_API_KEY</code> — the LLM key for future insight-card generation.</td></tr>
+  </table>
+  <p>Each has a matching <code>.env.example</code> file committed to git instead, with the variable names but no real values — this is how a teammate (or you, on a new machine) knows what to fill in without ever seeing the real secret. <code>load_dotenv()</code> (from the <code>python-dotenv</code> package) reads the real <code>.env</code> file at startup and makes its values available via <code>os.getenv("VAR_NAME")</code>.</p>
+  <div class="danger">
+    <div class="label">If you ever see a real API key or password in a git diff</div>
+    Stop and remove it before committing. A secret committed to git history is very difficult to fully erase later — every clone of the repo keeps a copy of every past commit.
+  </div>
+</div>
+
+<!-- 9 -->
+<div class="section" id="running">
+  <div class="section-title">9 — Running Everything, Day to Day</div>
+  <p>Three terminals, three servers, every time you work on this project:</p>
+  <table>
+    <tr><th>Terminal</th><th>Commands</th><th>Address</th></tr>
+    <tr><td>1 — Django</td><td><code>cd backend-django</code><br><code>.venv\Scripts\Activate</code><br><code>python manage.py runserver 8080</code></td><td>http://localhost:8080<br>Admin: http://localhost:8080/admin</td></tr>
+    <tr><td>2 — FastAPI</td><td><code>cd backend-fastapi</code><br><code>.venv\Scripts\Activate</code><br><code>uvicorn main:app --port 8001 --reload</code></td><td>http://localhost:8001<br>Interactive docs: http://localhost:8001/docs</td></tr>
+    <tr><td>3 — React</td><td><code>cd frontend</code><br><code>npm run dev</code></td><td>http://localhost:5173</td></tr>
+  </table>
+  <p>The frontend now runs on <strong>Vite</strong> (migrated from Create React App). <code>npm run dev</code> starts the dev server, defaulting to port <strong>5173</strong> — if that port is already busy, Vite automatically tries 5174, 5175, and so on, and prints whichever one it actually used. Other available commands: <code>npm run build</code> (produces an optimized production bundle in <code>frontend/dist/</code>), <code>npm run preview</code> (serves that built bundle locally to sanity-check it), and <code>npm test</code> (runs the Vitest test suite once).</p>
+  <div class="info">
+    <div class="label">FastAPI is optional for Django to start, not optional for ML features</div>
+    Django and React will run fine with FastAPI off — you just won't get profiling, training, or predictions. Always start Terminal 2 before trying to upload a dataset if you want to see a health score.
+  </div>
+</div>
+
+<!-- 10 -->
+<div class="section" id="filemap">
+  <div class="section-title">10 — Project File Map</div>
+  <div class="diagram">intelligent-ml-platform/
+├── backend-django/            Django app server (port 8080)
+│   ├── core/                  settings.py, urls.py — project-wide config
+│   ├── accounts/              UserProfile model, register/login/profile views
+│   ├── projects/              Project + WorkflowState models and views
+│   ├── datasets/              Dataset + DatasetVersion, upload endpoint (calls FastAPI)
+│   ├── experiments/           Experiment, AgentDecision, InsightCard, Report models
+│   ├── .env                   real DB credentials (never committed)
+│   └── requirements.txt
+├── backend-fastapi/           FastAPI ML engine (port 8001)
+│   ├── main.py                all 10 ML endpoints
+│   ├── .env                   DEEPSEEK_API_KEY (never committed)
+│   └── requirements.txt
+├── ml-core/                   plain Python, no server — imported by FastAPI only
+│   ├── cleaning.py            profiling, missing values, outliers, encoding
+│   ├── models.py              training every algorithm, task detection, tournament
+│   ├── evaluation.py          metrics, feature importance, What-If simulator
+│   ├── pipelines.py           orchestrates the three files above, in order
+│   └── setup.py               lets you `pip install -e .` this folder
+├── frontend/                  React 19 + Vite (port 5173)
+│   ├── index.html             Vite's entry HTML (not public/index.html anymore)
+│   ├── vite.config.js         dev server + Vitest config
+│   └── src/
+│       ├── main.jsx           mounts <App /> into #root
+│       ├── App.jsx
+│       └── api.js             every Django/FastAPI call, in one place
+└── docs/                      reference documents like this one</div>
+</div>
+
+<!-- 11 -->
+<div class="section" id="pitfalls">
+  <div class="section-title">11 — Things Worth Knowing: Beginner Pitfalls</div>
+  <ul>
+    <li><strong>numpy types are not JSON types.</strong> <code>numpy.int64</code>, <code>numpy.bool_</code>, and raw <code>NaN</code> all crash Python's <code>json</code> encoder even though they look like normal numbers. Every ml-core function that returns data explicitly casts to <code>int()</code>/<code>float()</code>/<code>bool()</code> for exactly this reason. If you add a new ML function later and it crashes with <code>"Object of type X is not JSON serializable"</code>, this is almost always why.</li>
+    <li><strong>The original file is never overwritten.</strong> Every cleaning function returns a brand-new DataFrame (<code>df = df.copy()</code> internally) instead of modifying in place. This is what makes <code>DatasetVersion</code> (original → cleaned → encoded → normalized) possible — if a function silently mutated the input, you could never get the original back.</li>
+    <li><strong>Forgetting to run migrations after changing a model</strong> is the single most common Django error you'll hit. If a field you just added doesn't seem to exist, this is why — see Section 4.</li>
+    <li><strong>Two venvs mean two installs.</strong> If you add a new package that Django's code needs (like <code>requests</code> was added for the FastAPI bridge), you must <code>pip install</code> it with <em>Django's</em> venv active, not FastAPI's, and vice versa for ML packages.</li>
+    <li><strong>Port collisions.</strong> If Vite says "Port 5173 is in use, trying another one," something else (often a leftover dev server from an earlier session) is still running. Either use whatever port it lands on, or find and stop the old process first.</li>
+    <li><strong><code>0.0.0.0</code> vs <code>localhost</code>.</strong> Uvicorn prints <code>http://0.0.0.0:8001</code> in the terminal — that address means "listen on every network interface," it is not a real page to visit. Always open <code>http://localhost:8001</code> in your browser instead.</li>
+    <li><strong>The graceful-degradation pattern is everywhere on purpose.</strong> Django's upload view catches FastAPI being offline; FastAPI's endpoints catch bad file paths and unknown algorithm names. A crash in one operation should never take down an entire server — it should return a clear error and let everything else keep working.</li>
+    <li><strong>CORS errors show up in the browser console, not the server logs.</strong> If React's network tab shows a request that never got a response, or the console says "blocked by CORS policy," check that the exact origin React is running on (including the port) is in both backends' allowed-origins lists.</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

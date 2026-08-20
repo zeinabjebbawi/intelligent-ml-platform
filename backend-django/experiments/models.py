@@ -1,0 +1,172 @@
+import uuid
+from django.db import models
+from projects.models import Project
+from datasets.models import DatasetVersion
+
+
+class Experiment(models.Model):
+    TASK_TYPE_CHOICES = [
+        ('classification', 'Classification'),
+        ('regression', 'Regression'),
+        ('clustering', 'Clustering'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='experiments'
+    )
+    # Points to the specific processed version used for training
+    dataset_version = models.ForeignKey(
+        DatasetVersion,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='experiments'
+    )
+    task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES)
+    target_column = models.CharField(max_length=100, blank=True, default='')
+    algorithm = models.CharField(max_length=100, blank=True, default='')
+
+    # hyperparameters: {"n_estimators": 100, "max_depth": 5}
+    hyperparameters = models.JSONField(default=dict)
+
+    # metrics: {"accuracy": 0.91, "f1_score": 0.87, "precision": 0.89, "recall": 0.85}
+    # OR for regression: {"rmse": 12.4, "mae": 9.1, "r2": 0.88}
+    metrics = models.JSONField(default=dict)
+
+    # feature_importance: {"glucose": 0.35, "bmi": 0.22, "age": 0.18}
+    feature_importance = models.JSONField(default=dict)
+
+    # confusion_matrix: [[50, 5], [8, 37]] — only for classification
+    confusion_matrix = models.JSONField(default=dict)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    train_test_split = models.FloatField(default=0.6)  # 60% train / 40% test
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.algorithm} — {self.task_type} ({self.status})"
+
+
+class AgentDecision(models.Model):
+    DECISION_TYPE_CHOICES = [
+        ('cleaning_recommendation', 'Cleaning Recommendation'),
+        ('goal_detection', 'Goal Detection'),
+        ('model_selection', 'Model Selection'),
+        ('tournament_winner', 'Tournament Winner'),
+        ('insight_generation', 'Insight Generation'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name='agent_decisions'
+    )
+    decision_type = models.CharField(max_length=50, choices=DECISION_TYPE_CHOICES)
+
+    # input_context: what data the agent had when making this decision
+    # {"health_score": 74, "missing_values_pct": 0.12, "task_detected": "classification"}
+    input_context = models.JSONField(default=dict)
+
+    # decision_output: what the agent decided
+    # {"selected_model": "RandomForest", "reason": "nonlinear patterns detected"}
+    decision_output = models.JSONField(default=dict)
+
+    reasoning = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.decision_type} — {self.experiment}"
+
+
+class InsightCard(models.Model):
+    SEVERITY_CHOICES = [
+        ('critical', 'Critical'),
+        ('warning', 'Warning'),
+        ('strength', 'Strength'),
+        ('tip', 'Tip'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name='insight_cards'
+    )
+    card_type = models.CharField(max_length=50)  # "feature_importance", "imbalance", etc.
+    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES)
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+
+    # detail stores supporting data for the card (chart data, numbers, etc.)
+    # {"feature": "glucose", "importance_score": 0.35, "chart_data": [...]}
+    detail = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{self.severity.upper()}] {self.title}"
+
+
+class WhatIfSimulation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.CASCADE,
+        related_name='simulations'
+    )
+    # input_values: the feature values the user set
+    # {"glucose": 180, "bmi": 32, "age": 52, "pregnancies": 2}
+    input_values = models.JSONField(default=dict)
+
+    # prediction: the model's output for those values
+    # {"label": "Diabetic", "probability": 0.81, "class_probabilities": {"Diabetic": 0.81, "Not Diabetic": 0.19}}
+    prediction = models.JSONField(default=dict)
+
+    confidence = models.FloatField(null=True, blank=True)
+
+    # feature_contributions: how much each feature contributed to this prediction
+    # {"glucose": 0.42, "bmi": 0.28, "age": 0.18}
+    feature_contributions = models.JSONField(default=dict)
+
+    scenario_label = models.CharField(max_length=50, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Simulation — {self.scenario_label or 'unnamed'} ({self.experiment})"
+
+
+class Report(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='reports'
+    )
+    experiment = models.ForeignKey(
+        Experiment,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='reports'
+    )
+    # content stores the full structured report data
+    content = models.JSONField(default=dict)
+    summary = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Report — {self.project.name} ({self.created_at.date()})"

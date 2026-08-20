@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IntelliML — Pipeline Steps: Complete Reference</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#1B2A6B;--teal:#0F6E56;--amber:#854F0B;--blue:#0C447C;--coral:#712B13;--purple:#3C3489;--bg:#FAFAFA;--border:#e0e0e0;--text:#1a1a1a;--muted:#666}
+body{font-family:'Times New Roman',Times,serif;font-size:12.5pt;line-height:1.75;color:var(--text);background:var(--bg);padding:32px 24px}
+.page{max-width:820px;margin:0 auto}
+.doc-header{text-align:center;padding:32px 0 24px;border-bottom:3px solid var(--navy);margin-bottom:36px}
+.doc-header h1{font-size:20pt;color:var(--navy);margin-bottom:6px}
+.doc-header p{color:var(--muted);font-style:italic;font-size:11.5pt}
+.step{border-radius:8px;overflow:hidden;margin-bottom:32px;border:1.5px solid var(--border)}
+.step-header{display:flex;align-items:center;gap:14px;padding:14px 20px}
+.step-num{font-family:'Courier New',monospace;font-size:16pt;font-weight:700;min-width:36px}
+.step-title{font-size:14pt;font-weight:700}
+.step-fn{font-family:'Courier New',monospace;font-size:11pt;opacity:0.85;margin-top:2px}
+.s-teal{background:#E1F5EE;border-color:var(--teal)}.s-teal .step-num,.s-teal .step-title{color:var(--teal)}
+.s-amber{background:#FAEEDA;border-color:var(--amber)}.s-amber .step-num,.s-amber .step-title{color:var(--amber)}
+.s-blue{background:#E6F1FB;border-color:var(--blue)}.s-blue .step-num,.s-blue .step-title{color:var(--blue)}
+.s-coral{background:#FAECE7;border-color:var(--coral)}.s-coral .step-num,.s-coral .step-title{color:var(--coral)}
+.s-gray{background:#F1EFE8;border-color:#888}.s-gray .step-num,.s-gray .step-title{color:#444}
+.step-body{padding:18px 22px;background:white;border-top:1px solid var(--border)}
+.step-body p{margin-bottom:12px;text-align:justify}
+.step-body p:last-child{margin-bottom:0}
+.io-row{display:flex;gap:24px;margin:14px 0;flex-wrap:wrap}
+.io-box{flex:1;min-width:200px;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.io-label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:5px 12px;background:#f4f6fb;color:var(--navy);border-bottom:1px solid var(--border)}
+.io-content{padding:8px 12px;font-family:'Courier New',monospace;font-size:9.5pt;color:var(--text);line-height:1.6}
+.concept{background:#f0f4ff;border-left:4px solid var(--navy);padding:10px 16px;margin:12px 0;border-radius:0 4px 4px 0;font-size:11.5pt}
+.concept strong{color:var(--navy)}
+.warning{background:#fff8e1;border-left:4px solid var(--amber);padding:10px 16px;margin:12px 0;border-radius:0 4px 4px 0;font-size:11.5pt}
+.warning strong{color:var(--amber)}
+code{font-family:'Courier New',monospace;font-size:9.5pt;background:#f0f0f8;padding:1px 5px;border-radius:3px}
+.sub-steps{list-style:none;padding:0;margin:10px 0}
+.sub-steps li{padding:6px 0 6px 20px;border-bottom:1px solid #f0f0f0;font-size:11.5pt;position:relative}
+.sub-steps li::before{content:"▸";position:absolute;left:0;color:var(--teal);font-weight:bold}
+.sub-steps li:last-child{border-bottom:none}
+.cond{color:var(--amber);font-style:italic;font-size:10.5pt}
+@media print{body{background:white;padding:16px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="doc-header">
+  <h1>IntelliML — Cleaning Pipeline Steps: Complete Reference</h1>
+  <p>Detailed explanation of all 10 steps in the execution diagram — what each function does, why it exists, and what flows between steps</p>
+</div>
+
+<!-- STEP 1 -->
+<div class="step s-gray">
+  <div class="step-header">
+    <span class="step-num">01</span>
+    <div><div class="step-title">User uploads CSV file</div><div class="step-fn">Django endpoint — file storage — FastAPI triggered</div></div>
+  </div>
+  <div class="step-body">
+    <p>The pipeline starts when a user uploads a CSV file through the React frontend. React sends the file as a multipart form POST request to Django at <code>/api/projects/&lt;uuid&gt;/datasets/upload/</code>. Django saves the file to disk at <code>media/datasets/user_{id}/project_{id}/original.csv</code> and creates a Dataset record in PostgreSQL with the file path. Django then calls FastAPI asynchronously to begin the analysis pipeline.</p>
+    <div class="concept"><strong>Why this way?</strong> Django handles file storage and database records. FastAPI handles the heavy computation. This separation means the file is safely stored before any ML processing begins — if FastAPI crashes mid-analysis, the original file is never lost.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">React sends</div><div class="io-content">multipart/form-data<br>key: "file"<br>value: CSV file bytes</div></div>
+      <div class="io-box"><div class="io-label">Django responds</div><div class="io-content">{ dataset_id: "uuid",<br>&nbsp;&nbsp;filename: "...",<br>&nbsp;&nbsp;storage_path: "..." }</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 2 -->
+<div class="step s-teal">
+  <div class="step-header">
+    <span class="step-num">02</span>
+    <div><div class="step-title">cleaning.load_data( filepath )</div><div class="step-fn">returns: raw pandas DataFrame</div></div>
+  </div>
+  <div class="step-body">
+    <p>The pipeline's first Python call. FastAPI receives the file path from Django and calls <code>load_data(filepath)</code>. This uses <code>pd.read_csv(filepath)</code> to read the CSV from disk into a pandas DataFrame. The DataFrame holds the data in memory as a table of rows and columns — exactly as uploaded, completely untouched.</p>
+    <div class="concept"><strong>Why not read the file directly in FastAPI?</strong> Centralizing file loading in <code>load_data()</code> means every part of the system loads CSVs the same way. If you later change from CSV to Parquet or add encoding detection, you change one function, not ten places in the code.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">filepath: string<br>e.g. "media/datasets/<br>&nbsp;user_1/project_x/<br>&nbsp;original.csv"</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">raw_df: pandas DataFrame<br>→ every row and column<br>→ no modifications made<br>→ includes NaN values</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 3 -->
+<div class="step s-teal">
+  <div class="step-header">
+    <span class="step-num">03</span>
+    <div><div class="step-title">cleaning.profile_dataset( df, target_column )</div><div class="step-fn">returns: profiling_result dict with health score, metadata, outliers, correlations</div></div>
+  </div>
+  <div class="step-body">
+    <p>The most important single function call in the entire pipeline. It receives the raw DataFrame and calls five helper functions internally, in this exact order:</p>
+    <ul class="sub-steps">
+      <li><code>get_column_metadata(df)</code> — for every column: type (numerical/categorical), missing count and percentage, mean/median/std/min/max for numbers, most-common value for text</li>
+      <li><code>count_outliers_per_column(df)</code> — counts outliers in every numerical column using IQR method</li>
+      <li><code>compute_correlations(df)</code> — Pearson correlation between every pair of numerical columns (for the heatmap)</li>
+      <li><code>detect_class_imbalance(df, target_column)</code> — checks if the target column is heavily skewed toward one class. <span class="cond">[Only runs if target_column is provided]</span></li>
+      <li><code>compute_health_score(profiling_result)</code> — computes a 0 — 100 score from four sub-scores: completeness (40%), duplicates (20%), outliers (20%), balance (20%)</li>
+    </ul>
+    <p>The assembled result is stored in <code>Dataset.profiling_result</code> as a JSONB column in PostgreSQL. This is what React reads to render the Diagnose page: health score gauge, column passports, correlation heatmap, and AI insight cards.</p>
+    <div class="concept"><strong>This step always runs immediately after upload.</strong> It is not optional and is not deferred. The user should see their dataset diagnosed before they do anything else.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">df: raw DataFrame<br>target_column: string<br>&nbsp;&nbsp;or None</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">profiling_result: {<br>&nbsp;total_rows, total_columns,<br>&nbsp;missing_pct_overall,<br>&nbsp;duplicate_rows,<br>&nbsp;outlier_counts,<br>&nbsp;columns_metadata,<br>&nbsp;correlations,<br>&nbsp;class_imbalance,<br>&nbsp;health_score: {overall,<br>&nbsp;&nbsp;completeness, duplicates,<br>&nbsp;&nbsp;outliers, balance}<br>}</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 4 -->
+<div class="step s-amber">
+  <div class="step-header">
+    <span class="step-num">04</span>
+    <div><div class="step-title">cleaning.build_auto_clean_config( profiling_result )</div><div class="step-fn">returns: config dict — decisions only, no data modified</div></div>
+  </div>
+  <div class="step-body">
+    <p>This is a pure decision function. It reads the profiling result and applies rules to decide which cleaning steps are needed. Critically, <strong>no DataFrame is involved here at all</strong>. The function only reads numbers from the profiling dict and writes decisions into a config dict. No data is modified in this step.</p>
+    <p>The decision rules it applies:</p>
+    <ul class="sub-steps">
+      <li>If <code>duplicate_rows &gt; 0</code> — set <code>remove_duplicates: True</code></li>
+      <li>For each numerical column: run <code>check_normality(df, col)</code> — if normal, set method to "zscore"; if not normal (skewed), set method to "iqr" — IQR is more robust for non-normal data</li>
+      <li>If outlier density exceeds 2% — set <code>remove_outlier_method</code> per column</li>
+      <li>If any column has &gt;90% missing values — add it to <code>columns_to_drop</code> (it is useless)</li>
+      <li>Set <code>fill_numerical_strategy</code> to "mean" or "median" based on outlier density in each column</li>
+    </ul>
+    <div class="warning"><strong>In Smart Auto mode:</strong> this config is fed directly to <code>auto_clean()</code>. <strong>In Expert mode:</strong> this config is displayed to the user as recommendations. The user then decides what to apply.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">profiling_result: dict<br>(from Step 3)</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">config: {<br>&nbsp;remove_duplicates: bool,<br>&nbsp;fill_numerical_strategy: str,<br>&nbsp;fill_categorical_strategy: str,<br>&nbsp;remove_outlier_method: str,<br>&nbsp;columns_to_drop: list<br>}</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 5 -->
+<div class="step s-teal">
+  <div class="step-header">
+    <span class="step-num">05</span>
+    <div><div class="step-title">cleaning.auto_clean( df, profiling_result, target_col )</div><div class="step-fn">returns: (cleaned_df, summary_list) — 5 internal sub-steps in sequence</div></div>
+  </div>
+  <div class="step-body">
+    <p>This is where the actual data transformation happens. It calls <code>build_auto_clean_config()</code> internally and then executes the approved operations in a strict sequence. Each step is conditional — it only runs if the config says it should. The order is deliberate and important:</p>
+    <ul class="sub-steps">
+      <li><strong>Step 1: <code>drop_columns()</code></strong> — drops columns with &gt;90% missing values. <span class="cond">[conditional]</span> Must run FIRST so later steps don't try to fill values in useless columns</li>
+      <li><strong>Step 2: <code>remove_duplicates()</code></strong> — removes exact duplicate rows. <span class="cond">[conditional]</span> Must run before filling missing values, or duplicates might be filled inconsistently</li>
+      <li><strong>Step 3: <code>fill_missing_with_mean/median()</code></strong> — fills NaN in every numerical column using the strategy decided in config (mean if low outliers, median if high outliers). Runs for every numerical column with any NaN values</li>
+      <li><strong>Step 4: <code>fill_missing_categorical()</code></strong> — fills NaN in every text/categorical column with mode (most common value)</li>
+      <li><strong>Step 5: <code>remove_outliers_iqr() or remove_outliers_zscore()</code></strong> — removes outlier rows from numerical columns (except the target column, which is never touched). <span class="cond">[conditional: only if outlier density exceeds 2%]</span> Runs last because outlier removal reduces the number of rows — we want to do this after filling missing values, not before</li>
+    </ul>
+    <p>The function returns two things: the cleaned DataFrame (saved as <code>cleaned_v2.csv</code>) and a human-readable summary list that becomes the transparent activity log shown to the user.</p>
+    <div class="concept"><strong>Original file is never touched.</strong> The function starts with <code>df = df.copy()</code> in every atomic function it calls. <code>original.csv</code> on disk is never modified.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">df: raw DataFrame<br>profiling_result: dict<br>target_column: string or None</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">cleaned_df: DataFrame<br>&nbsp;(new, not the original)<br>summary: [<br>&nbsp;"Removed 3 duplicates",<br>&nbsp;"Filled 12 missing in Age",<br>&nbsp;"Removed 4 outliers in BMI",<br>&nbsp;...]</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 6 -->
+<div class="step s-teal">
+  <div class="step-header">
+    <span class="step-num">06</span>
+    <div><div class="step-title">cleaning.encode_categorical_columns( cleaned_df )</div><div class="step-fn">conditional — returns: (encoded_df, encoding_map)</div></div>
+  </div>
+  <div class="step-body">
+    <p>ML algorithms only understand numbers. If the dataset has text columns like Gender ("Male","Female") or City ("Beirut","London"), they must be converted to integers before training. This function applies <code>LabelEncoder</code> from scikit-learn to every text/categorical column.</p>
+    <p>The <code>encoding_map</code> returned is crucial for transparency. It records exactly what was converted to what: <code>{"Gender": {"Female": 0, "Male": 1}}</code>. This map is stored in <code>DatasetVersion.transformations_applied</code> so the user can see "Male was mapped to 1, Female to 0" in the activity log.</p>
+    <div class="warning"><strong>The target column is excluded from encoding.</strong> If we encode "Diabetic/Not Diabetic" before the split, it becomes 0/1, which is fine. But we need to be careful that the target column labels remain interpretable for the evaluation output. Pass <code>exclude_columns=[target_column]</code> to preserve it unless it's already numerical.</div>
+    <p>This step is <strong>conditional</strong> — it only runs if the cleaned DataFrame still has categorical (text) columns after cleaning. If all columns are already numerical, this step is skipped entirely.</p>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">cleaned_df: DataFrame<br>exclude_columns: list<br>&nbsp;(e.g. [target_column])</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">encoded_df: DataFrame<br>&nbsp;(text → integers)<br>encoding_map: {<br>&nbsp;"Gender": {"Male":1,"Female":0},<br>&nbsp;"City": {"Beirut":0,"London":1}<br>}</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 7 -->
+<div class="step s-blue">
+  <div class="step-header">
+    <span class="step-num">07</span>
+    <div><div class="step-title">pipelines.split_features_target( df, target_column )</div><div class="step-fn">returns: X (all features) and y (target Series)</div></div>
+  </div>
+  <div class="step-body">
+    <p>Before training, the data must be split into two parts: X (the input features — everything the model learns from) and y (the target — what the model is trying to predict). This function simply removes the target column from the DataFrame to produce X, and returns the target column alone as y.</p>
+    <div class="concept"><strong>Why must the target be separated?</strong> If the target column stays in X, the model will accidentally learn to predict by reading the answer directly. This is called <em>target leakage</em> and produces a model with 100% accuracy on training data that completely fails in the real world. Separating them at this step prevents this from happening.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">df: encoded DataFrame<br>target_column: string<br>&nbsp;(e.g. "Outcome")</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">X: DataFrame<br>&nbsp;(all columns except target)<br>y: pandas Series<br>&nbsp;(the target column alone)</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 8 -->
+<div class="step s-blue">
+  <div class="step-header">
+    <span class="step-num">08</span>
+    <div><div class="step-title">pipelines.split_train_test( X, y, test_size=0.4 )</div><div class="step-fn">returns: X_train, X_test, y_train, y_test (4 arrays)</div></div>
+  </div>
+  <div class="step-body">
+    <p>The dataset must be split into two independent groups: a training set (what the model learns from) and a test set (what we use to measure its real performance on unseen data). We use 40% for testing (test_size=0.4), meaning 60% trains the model.</p>
+    <div class="concept"><strong>Why 60/40 instead of 80/20?</strong> The course used 60/40 which is a valid choice. A larger test set gives a more reliable estimate of real-world performance but leaves less data for training. For most educational datasets (hundreds to thousands of rows), 60/40 works well.</div>
+    <div class="concept"><strong>What is stratify=y?</strong> For classification tasks, we pass <code>stratify=y</code> so that both the training and test sets have the same class proportions as the original. Without it, you might get a training set that's 95% class 0 and a test set that's 60% class 1 — making the evaluation meaningless.</div>
+    <p>The split is deterministic: we always pass <code>random_state=42</code>, meaning the same data will always produce the same split. This guarantees reproducibility — running the same experiment twice produces identical results.</p>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">X: features DataFrame<br>y: target Series<br>test_size: 0.4 (default)<br>random_state: 42</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">X_train: 60% of X rows<br>X_test: 40% of X rows<br>y_train: matching 60% of y<br>y_test: matching 40% of y</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 9 -->
+<div class="step s-blue">
+  <div class="step-header">
+    <span class="step-num">09</span>
+    <div><div class="step-title">pipelines.scale_features( X_train, X_test )</div><div class="step-fn">fits scaler on X_train ONLY — returns: X_train_scaled, X_test_scaled, scaler</div></div>
+  </div>
+  <div class="step-body">
+    <p>StandardScaler normalizes each feature so that it has a mean of 0 and a standard deviation of 1. Without this, a feature like "Age" (values 18-90) would dominate a feature like "Glucose" (values 40-200) purely because its numbers are larger, not because it's more important. Scaling puts every feature on an equal footing.</p>
+    <div class="warning"><strong>The most important ML rule in this entire pipeline:</strong> the scaler FITS only on X_train. It learns the mean and standard deviation from the training data only. It then TRANSFORMS both X_train and X_test using those same learned values. <strong>Never fit the scaler on all data before splitting.</strong> If you do, the test set's statistics influence the scaler, which means the model indirectly "sees" the test set during training. This is called data leakage and inflates accuracy scores.</div>
+    <p>The scaler object itself is returned and saved to disk alongside the trained model. This is essential for the What-If Simulator: when a user inputs slider values (e.g., Glucose=180), those values must be scaled using the exact same mean and std that were used during training, otherwise the prediction will be wrong.</p>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">Receives</div><div class="io-content">X_train: 60% split features<br>X_test: 40% split features</div></div>
+      <div class="io-box"><div class="io-label">Returns</div><div class="io-content">X_train_scaled: normalized<br>X_test_scaled: normalized<br>&nbsp;(same scaler applied)<br>scaler: fitted StandardScaler<br>&nbsp;(saved for What-If Simulator)</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 10 -->
+<div class="step s-coral">
+  <div class="step-header">
+    <span class="step-num">10</span>
+    <div><div class="step-title">→ models.py receives the prepared data</div><div class="step-fn">pipelines.py hands off: X_train_scaled, X_test_scaled, y_train, y_test</div></div>
+  </div>
+  <div class="step-body">
+    <p>At this point the cleaning pipeline is complete. pipelines.py passes four arrays to models.py: <code>X_train_scaled</code>, <code>X_test_scaled</code>, <code>y_train</code>, <code>y_test</code>. The data is clean, encoded, split, and normalized — ready for any algorithm.</p>
+    <p>models.py then does one of two things depending on the mode. In Auto mode, it calls <code>run_tournament()</code> with all recommended algorithms and returns a leaderboard. In Expert mode, it calls the specific <code>train_*()</code> function the user selected.</p>
+    <p>The final outputs of the training step (the fitted model and scaler) are saved to disk by <code>save_model()</code>. The experiment record in PostgreSQL stores the metrics as a JSONB column. evaluation.py reads the fitted model and the test data to compute all metrics, feature importance, and eventually power the What-If Simulator.</p>
+    <div class="concept"><strong>What flows back to the user?</strong> A complete results dict containing: accuracy (or RMSE/R² for regression), confusion matrix, feature importance, the health score that was computed in Step 3, the cleaning summary from Step 5, and the full insight cards generated by DeepSeek reading all of the above.</div>
+    <div class="io-row">
+      <div class="io-box"><div class="io-label">models.py receives</div><div class="io-content">X_train_scaled: numpy array<br>X_test_scaled: numpy array<br>y_train: numpy array<br>y_test: numpy array<br>task_type: string<br>algorithm: string or list</div></div>
+      <div class="io-box"><div class="io-label">Ultimately returns</div><div class="io-content">fitted_model: sklearn model<br>metrics: {accuracy, f1,...}<br>feature_importance: dict<br>model_path: string<br>scaler_path: string</div></div>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

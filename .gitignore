@@ -1,4 +1,9 @@
 venv/
+.venv/
 __pycache__/
+*.egg-info/
 node_modules/
 .env
+db.sqlite3
+backend-fastapi/sample_data/
+backend-django/media/

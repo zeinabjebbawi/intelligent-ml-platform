@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IntelliML — FastAPI Backend Explained</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#1B2A6B;--teal:#0F6E56;--amber:#854F0B;--blue:#0277BD;--coral:#993C1D;--purple:#3C3489;--bg:#FAFAFA;--border:#e0e0e0;--text:#1a1a1a;--muted:#666}
+body{font-family:'Times New Roman',Times,serif;font-size:12.5pt;line-height:1.75;color:var(--text);background:var(--bg);padding:32px 24px}
+.page{max-width:820px;margin:0 auto}
+.doc-header{text-align:center;padding:32px 0 24px;border-bottom:3px solid var(--navy);margin-bottom:36px}
+.doc-header h1{font-size:20pt;color:var(--navy);margin-bottom:6px}
+.doc-header p{color:var(--muted);font-style:italic;font-size:11.5pt}
+.section{margin-bottom:44px}
+.section-title{font-size:15pt;font-weight:700;color:var(--navy);border-bottom:2px solid var(--navy);padding-bottom:7px;margin-bottom:18px}
+.section-sub{font-size:13pt;font-weight:700;color:var(--teal);margin:20px 0 10px}
+p{margin-bottom:12px;text-align:justify}
+.analogy{background:#e8f5e9;border-left:5px solid var(--teal);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.analogy .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--teal);margin-bottom:4px}
+.info{background:#e3f2fd;border-left:5px solid var(--blue);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.info .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--blue);margin-bottom:4px}
+.warn{background:#fff3e0;border-left:5px solid var(--amber);border-radius:0 4px 4px 0;padding:12px 16px;margin:14px 0;font-size:11.5pt}
+.warn .label{font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--amber);margin-bottom:4px}
+code{font-family:'Courier New',monospace;font-size:9.5pt;background:#f0f0f8;padding:1px 5px;border-radius:3px}
+.code-block{background:#0f1117;border-radius:8px;padding:16px 18px;margin:12px 0;overflow-x:auto;font-family:'Courier New',monospace;font-size:9.5pt;line-height:1.7}
+.code-block code{color:#e2e8f0;background:none;padding:0}
+.kw{color:#bd93f9}.str{color:#f1fa8c}.cm{color:#6272a4;font-style:italic}.fn{color:#50fa7b}.cls{color:#8be9fd}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:11pt}
+th{background:var(--navy);color:white;padding:8px 12px;text-align:left}
+td{padding:8px 12px;border:1px solid var(--border);vertical-align:top}
+tr:nth-child(even) td{background:#f0f4ff}
+.ep-card{border:1.5px solid var(--border);border-radius:8px;margin:14px 0;overflow:hidden}
+.ep-header{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f8f9ff;border-bottom:1px solid var(--border)}
+.method{font-family:'Courier New',monospace;font-size:9.5pt;font-weight:700;padding:2px 10px;border-radius:4px;color:white}
+.post{background:#2E7D32}.get{background:#0277BD}
+.ep-url{font-family:'Courier New',monospace;font-size:10pt;color:var(--navy)}
+.ep-body{padding:12px 16px;font-size:11.5pt}
+.ep-body p{margin-bottom:6px}
+.flow-step{display:flex;gap:12px;align-items:flex-start;margin:8px 0}
+.step-n{background:var(--navy);color:white;min-width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9.5pt;font-weight:700;flex-shrink:0;margin-top:2px;font-family:'Courier New',monospace}
+.step-n.teal{background:var(--teal)}
+.step-n.amber{background:var(--amber)}
+.step-n.blue{background:var(--blue)}
+@media print{body{background:white;padding:16px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="doc-header">
+  <h1>IntelliML — FastAPI Backend Explained</h1>
+  <p>What FastAPI is, why we use it, and exactly what every endpoint does</p>
+</div>
+
+<!-- SECTION 1 -->
+<div class="section">
+  <div class="section-title">1 — What is FastAPI and Why Do We Use It?</div>
+
+  <div class="analogy">
+    <div class="label">Simple Analogy</div>
+    Django is the building manager — it handles accounts, stores files, keeps records, manages access. FastAPI is the specialized lab technician — it only does scientific computation. When the building manager needs ML analysis done, he sends the data to the lab. The lab does the heavy work and sends back results. Two separate specialists doing what they're each best at.
+  </div>
+
+  <p>FastAPI is a Python web framework specifically designed for <strong>fast, asynchronous API development</strong>. It has three major advantages that make it perfect for the ML engine role:</p>
+
+  <table>
+    <tr><th>Feature</th><th>What It Means For Us</th></tr>
+    <tr><td><strong>Async support</strong></td><td>ML training can run without blocking other requests. Multiple users can train simultaneously.</td></tr>
+    <tr><td><strong>Automatic docs</strong></td><td>Go to <code>http://localhost:8001/docs</code> after starting — FastAPI generates a full interactive API tester automatically. No Postman needed.</td></tr>
+    <tr><td><strong>Pydantic validation</strong></td><td>Every request is automatically validated. If React sends the wrong data shape, FastAPI rejects it with a clear error before any code runs.</td></tr>
+    <tr><td><strong>Speed</strong></td><td>FastAPI is one of the fastest Python frameworks — comparable to Node.js. Perfect for ML inference endpoints that need low latency.</td></tr>
+  </table>
+</div>
+
+<!-- SECTION 2 -->
+<div class="section">
+  <div class="section-title">2 — FastAPI vs Django: What Goes Where</div>
+
+  <table>
+    <tr><th>Responsibility</th><th>Django (port 8080)</th><th>FastAPI (port 8001)</th></tr>
+    <tr><td>User accounts, login, auth</td><td>✓</td><td>✗</td></tr>
+    <tr><td>File upload + storage</td><td>✓</td><td>✗</td></tr>
+    <tr><td>Database (PostgreSQL)</td><td>✓</td><td>✗</td></tr>
+    <tr><td>Project + experiment records</td><td>✓</td><td>✗</td></tr>
+    <tr><td>CSV profiling (health score)</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Data cleaning + preprocessing</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Model training + evaluation</td><td>✗</td><td>✓</td></tr>
+    <tr><td>What-If Simulator predictions</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Model tournament</td><td>✗</td><td>✓</td></tr>
+    <tr><td>DeepSeek LLM calls</td><td>✗</td><td>✓</td></tr>
+  </table>
+
+  <div class="info">
+    <div class="label">How They Connect</div>
+    React talks directly to BOTH backends. When React needs to upload a file or check login, it calls Django. When React needs to run ML analysis, it calls FastAPI. Django also calls FastAPI internally for some background operations (like triggering profiling after a file upload). FastAPI never writes to the PostgreSQL database directly — it returns results to React or Django, and Django handles the database writes.
+  </div>
+</div>
+
+<!-- SECTION 3 -->
+<div class="section">
+  <div class="section-title">3 — The Three Concepts You Need to Understand</div>
+
+  <div class="section-sub">Concept 1 — The Route (endpoint address)</div>
+  <p>A route is a URL address + HTTP method that triggers a Python function when called. In Django you had <code>urlpatterns</code> and views. In FastAPI, the route and the function are combined in one decorator:</p>
+
+  <div class="code-block"><code>
+<span class="cm"># Django: separate urls.py + views.py</span><br>
+<span class="cm"># FastAPI: combined in one place</span><br>
+<br>
+<span class="dec">@app.post</span>(<span class="str">"/ml/profile"</span>)<br>
+<span class="kw">def</span> <span class="fn">profile_dataset_endpoint</span>(request: ProfileRequest):<br>
+&nbsp;&nbsp;<span class="cm"># This function runs when React sends POST to /ml/profile</span><br>
+&nbsp;&nbsp;<span class="kw">return</span> {<span class="str">"health_score"</span>: <span class="num">87</span>}
+  </code></div>
+
+  <div class="section-sub">Concept 2 — Pydantic Model (request validation)</div>
+  <p>A Pydantic model is a Python class that defines exactly what shape the incoming JSON must have. FastAPI automatically rejects requests that do not match, with a clear error message. This replaces all the manual <code>if not request.data.get('file_path')</code> checks you would otherwise write:</p>
+
+  <div class="code-block"><code>
+<span class="kw">class</span> <span class="cls">ProfileRequest</span>(BaseModel):<br>
+&nbsp;&nbsp;file_path:      <span class="cls">str</span>             <span class="cm"># required</span><br>
+&nbsp;&nbsp;target_column:  Optional[<span class="cls">str</span>] = <span class="kw">None</span>  <span class="cm"># optional, defaults to None</span><br>
+<br>
+<span class="cm"># FastAPI will now:</span><br>
+<span class="cm"># ✓ Accept:  {"file_path": "media/.../original.csv"}</span><br>
+<span class="cm"># ✓ Accept:  {"file_path": "...", "target_column": "Outcome"}</span><br>
+<span class="cm"># ✗ Reject:  {}            → 422 error: "file_path field required"</span><br>
+<span class="cm"># ✗ Reject:  {"x": 123}    → 422 error: "file_path field required"</span>
+  </code></div>
+
+  <div class="section-sub">Concept 3 — HTTPException (error handling)</div>
+  <p>When something goes wrong, FastAPI returns a proper HTTP error code with a message. The most common ones in our system:</p>
+  <table>
+    <tr><th>Code</th><th>Meaning</th><th>When We Use It</th></tr>
+    <tr><td><code>404</code></td><td>Not Found</td><td>CSV file path does not exist on disk</td></tr>
+    <tr><td><code>400</code></td><td>Bad Request</td><td>User sent an unknown step_name or invalid parameters</td></tr>
+    <tr><td><code>500</code></td><td>Server Error</td><td>Something crashed inside our ML functions</td></tr>
+    <tr><td><code>422</code></td><td>Validation Error</td><td>Pydantic rejected the request shape (auto, we don't write this)</td></tr>
+  </table>
+</div>
+
+<!-- SECTION 4 -->
+<div class="section">
+  <div class="section-title">4 — How a Request Travels Through FastAPI</div>
+  <p>Following one request from React to FastAPI and back:</p>
+
+  <div class="flow-step">
+    <div class="step-n">1</div>
+    <div><strong>React sends POST to http://localhost:8001/ml/profile</strong><br>
+    Body: <code>{"file_path": "media/.../original.csv", "target_column": "Outcome"}</code></div>
+  </div>
+  <div class="flow-step">
+    <div class="step-n teal">2</div>
+    <div><strong>FastAPI's CORS middleware checks the origin</strong><br>
+    Is this request coming from http://localhost:5173 (React)? Yes — allowed to proceed.</div>
+  </div>
+  <div class="flow-step">
+    <div class="step-n teal">3</div>
+    <div><strong>FastAPI matches the URL to a route function</strong><br>
+    <code>POST /ml/profile</code> → calls <code>profile_dataset_endpoint()</code></div>
+  </div>
+  <div class="flow-step">
+    <div class="step-n amber">4</div>
+    <div><strong>Pydantic validates the request body against ProfileRequest</strong><br>
+    Is <code>file_path</code> present? Is it a string? Yes — creates a ProfileRequest object and passes it to the function.</div>
+  </div>
+  <div class="flow-step">
+    <div class="step-n amber">5</div>
+    <div><strong>The function runs our ML code</strong><br>
+    <code>load_data(request.file_path)</code> → <code>profile_dataset(df, request.target_column)</code></div>
+  </div>
+  <div class="flow-step">
+    <div class="step-n blue">6</div>
+    <div><strong>Function returns a Python dict</strong><br>
+    FastAPI automatically converts it to JSON and sends it back to React.</div>
+  </div>
+  <div class="flow-step">
+    <div class="step-n blue">7</div>
+    <div><strong>React receives the JSON response</strong><br>
+    <code>{"profiling_result": {...}, "health_score": {"overall": 87, ...}}</code><br>
+    React renders the Diagnose page from this data.</div>
+  </div>
+
+  <div class="warn">
+    <div class="label">⚠️ What happens if the ML code crashes</div>
+    If <code>profile_dataset()</code> throws any exception, the <code>except Exception as e</code> block catches it and returns a 500 error with the error message. React shows an error state. The server keeps running — one failed request never brings down the whole FastAPI server.
+  </div>
+</div>
+
+<!-- SECTION 5 -->
+<div class="section">
+  <div class="section-title">5 — Every Endpoint in main.py Explained</div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method get">GET</span><span class="ep-url">/health</span></div>
+    <div class="ep-body"><p>The simplest endpoint. Returns <code>{"status": "ok"}</code>. Used to verify the FastAPI server is running before making real requests. React can call this on page load to show a "ML engine connected" indicator.</p></div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/profile</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> immediately after a CSV is uploaded to Django. Django sends the saved file path to FastAPI for analysis.</p>
+      <p><strong>What it does:</strong> calls <code>load_data(file_path)</code> then <code>profile_dataset(df, target_column)</code>.</p>
+      <p><strong>Returns:</strong> the full profiling result — health score, column metadata, outlier counts, correlations, class imbalance. This is everything shown on the Diagnose page.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/recommendations</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> when the user reaches the Model Selection step and the system needs to show recommended algorithms.</p>
+      <p><strong>What it does:</strong> calls <code>recommend_models(task_type, profiling_result)</code>.</p>
+      <p><strong>Returns:</strong> ranked list of algorithms with plain-language reasons for each recommendation.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/clean/auto</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> in Smart Auto mode, immediately after profiling.</p>
+      <p><strong>What it does:</strong> calls <code>auto_clean(df, profiling_result, target_column)</code> which runs all 5 cleaning steps automatically. Saves the cleaned CSV to disk.</p>
+      <p><strong>Returns:</strong> path to cleaned file, the cleaning summary list (for the transparency panel), rows before/after counts.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/clean/step</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> in Guided Expert mode, once per user decision. If the user has 3 recommendations and accepts all 3, this endpoint is called 3 separate times.</p>
+      <p><strong>What it does:</strong> calls <code>run_cleaning_step(df, step_name, config)</code> to execute exactly ONE atomic cleaning operation.</p>
+      <p><strong>Returns:</strong> description of what was done, row counts before and after, encoding map if encoding was applied.</p>
+      <p><strong>Important:</strong> this endpoint OVERWRITES the file at the given path with the cleaned version. React tracks the current file path through the session.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/train</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> in Guided Expert mode when the user clicks "Run Training" after finishing the cleaning steps and selecting an algorithm.</p>
+      <p><strong>What it does:</strong> calls <code>run_full_pipeline()</code> which runs the complete sequence → profile → clean → encode → split → scale → train → evaluate → save model.</p>
+      <p><strong>Returns:</strong> complete results dict with all metrics, feature importance, model path, scaler path, and pipeline summary.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/auto</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> in Smart Auto mode — the user uploaded data and clicked "Run Everything." This one call does everything.</p>
+      <p><strong>What it does:</strong> calls <code>run_auto_pipeline()</code> which auto-detects task type, runs the tournament with all recommended algorithms, and returns the complete results.</p>
+      <p><strong>Returns:</strong> everything from /ml/train plus the tournament leaderboard and agent_decisions list.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/elbow</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> when the user selects KNN as their algorithm. The elbow curve helps them pick the best k before training.</p>
+      <p><strong>What it does:</strong> runs the full cleaning + encoding + splitting pipeline, then calls <code>get_elbow_data()</code> to test every k value from 1 to 27.</p>
+      <p><strong>Returns:</strong> <code>{"k_values": [1..27], "accuracies": [...], "best_k": 7}</code>. React renders the elbow curve chart from this data.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/what-if/predict</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> every time the user moves a slider in the What-If Simulator.</p>
+      <p><strong>What it does:</strong> loads the saved model + scaler, normalizes the slider values, and calls <code>model.predict()</code>.</p>
+      <p><strong>Returns:</strong> predicted label, confidence percentage, all class probabilities. React updates the prediction display immediately.</p>
+    </div>
+  </div>
+
+  <div class="ep-card">
+    <div class="ep-header"><span class="method post">POST</span><span class="ep-url">/ml/what-if/contributions</span></div>
+    <div class="ep-body">
+      <p><strong>When called:</strong> alongside /ml/what-if/predict when the user changes sliders.</p>
+      <p><strong>What it does:</strong> loads the model and computes how much each feature contributed to this specific prediction.</p>
+      <p><strong>Returns:</strong> <code>{"contributions": {"Glucose": 0.45, "BMI": 0.30, ...}}</code>. React renders the contribution bar/radar chart.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 6 -->
+<div class="section">
+  <div class="section-title">6 — Running FastAPI</div>
+
+  <div class="code-block"><code>
+<span class="cm"># Install dependencies (one time)</span><br>
+pip install fastapi uvicorn python-dotenv<br>
+<br>
+<span class="cm"># Run the FastAPI server (every time you open the project)</span><br>
+cd C:\Users\user\ml-website\backend-fastapi<br>
+..\venv\Scripts\Activate<br>
+uvicorn main:app --host 0.0.0.0 --port 8001 --reload<br>
+<br>
+<span class="cm"># What each part means:</span><br>
+<span class="cm"># main:app — look in main.py, find the object named "app"</span><br>
+<span class="cm"># --port 8001 — run on port 8001 (Django is on 8080, React on 5173)</span><br>
+<span class="cm"># --reload — automatically restart when you save main.py (dev mode)</span>
+  </code></div>
+
+  <p>After starting, open <strong>http://localhost:8001/docs</strong> in your browser. FastAPI has automatically generated a complete interactive API documentation page. You can test every endpoint directly from the browser without writing any test code.</p>
+
+  <div class="info">
+    <div class="label">What is Uvicorn?</div>
+    Uvicorn is an ASGI server — the thing that actually listens for incoming network requests and passes them to FastAPI. Think of FastAPI as the brain and Uvicorn as the ears. Django uses Gunicorn or its built-in server. FastAPI uses Uvicorn. You never call Uvicorn's functions directly — you just start it from the terminal and it handles everything.
+  </div>
+</div>
+
+<!-- SECTION 7 -->
+<div class="section">
+  <div class="section-title">7 — The .env File and Environment Variables</div>
+  <p>Create a <code>.env</code> file inside <code>backend-fastapi/</code>:</p>
+  <div class="code-block"><code>
+<span class="cm"># backend-fastapi/.env</span><br>
+DEEPSEEK_API_KEY=your_key_from_supervisor_here<br>
+ML_CORE_PATH=../ml-core<br>
+MODEL_SAVE_DIR=../backend/media/models/<br>
+DATASET_SAVE_DIR=../backend/media/datasets/
+  </code></div>
+  <p>FastAPI loads this file with <code>load_dotenv()</code> from the <code>python-dotenv</code> library. The DeepSeek key is read with <code>os.getenv("DEEPSEEK_API_KEY")</code>. Like Django's .env, this file must never be committed to GitHub.</p>
+</div>
+
+<!-- SECTION 8 -->
+<div class="section">
+  <div class="section-title">8 — Your Terminal Setup for Full Development</div>
+  <table>
+    <tr><th>Terminal</th><th>What to Run</th><th>Port</th></tr>
+    <tr><td>Terminal 1</td><td>Django: <code>python manage.py runserver 8080</code></td><td>8080</td></tr>
+    <tr><td>Terminal 2</td><td>FastAPI: <code>uvicorn main:app --port 8001 --reload</code></td><td>8001</td></tr>
+    <tr><td>Terminal 3</td><td>React: <code>npm run dev</code></td><td>5173</td></tr>
+  </table>
+  <p>Open your browser at <code>http://localhost:5173</code> for the application, and <code>http://localhost:8001/docs</code> to test FastAPI endpoints directly.</p>
+</div>
+
+</div>
+</body>
+</html>

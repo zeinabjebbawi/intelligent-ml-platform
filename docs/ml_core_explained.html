@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IntelliML — ML Core Files Explained</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--teal:#0F6E56;--teal-l:#E1F5EE;--coral:#993C1D;--coral-l:#FAECE7;--purple:#3C3489;--purple-l:#EEEDFE;--amber:#854F0B;--amber-l:#FAEEDA;--navy:#1B2A6B;--bg:#FAFAFA;--border:#E0E0E0;--text:#1a1a1a;--muted:#666}
+body{font-family:'Crimson Pro',Georgia,serif;font-size:12.5pt;line-height:1.72;color:var(--text);background:var(--bg)}
+.page{max-width:880px;margin:0 auto;padding:32px 24px}
+.doc-header{text-align:center;padding:36px 0 28px;border-bottom:3px solid var(--navy);margin-bottom:36px}
+.doc-header h1{font-size:22pt;color:var(--navy);margin-bottom:6px}
+.doc-header p{color:var(--muted);font-size:11.5pt;font-style:italic}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:40px}
+.sum-card{border-radius:8px;padding:16px 14px;text-align:center;border:1.5px solid}
+.sum-card h3{font-size:22pt;font-weight:700;margin-bottom:2px}
+.sum-card p{font-size:10pt;margin-bottom:8px;font-style:italic}
+.sum-card .sub{font-size:9.5pt;color:inherit;opacity:0.75}
+.sum-teal{background:var(--teal-l);border-color:var(--teal);color:var(--teal)}
+.sum-coral{background:var(--coral-l);border-color:var(--coral);color:var(--coral)}
+.sum-purple{background:var(--purple-l);border-color:var(--purple);color:var(--purple)}
+.sum-amber{background:var(--amber-l);border-color:var(--amber);color:var(--amber)}
+.file-section{margin-bottom:52px}
+.file-header{border-radius:8px 8px 0 0;padding:16px 20px;margin-bottom:0}
+.file-header h2{font-size:16pt;font-weight:700;margin-bottom:4px}
+.file-header p{font-size:11pt;opacity:0.85;font-style:italic}
+.h-teal{background:var(--teal);color:#E1F5EE}
+.h-coral{background:var(--coral);color:#FAECE7}
+.h-purple{background:var(--purple);color:#EEEDFE}
+.h-amber{background:var(--amber);color:#FAEEDA}
+.file-body{border:1.5px solid var(--border);border-top:none;border-radius:0 0 8px 8px;overflow:hidden}
+.role-box{padding:14px 20px;font-size:11.5pt;border-bottom:1px solid var(--border)}
+.role-box strong{color:var(--navy)}
+table{width:100%;border-collapse:collapse;font-size:11pt}
+th{padding:9px 14px;text-align:left;font-size:10pt;font-weight:700;letter-spacing:0.5px;background:#f4f6fb;border-bottom:2px solid var(--border);color:var(--navy)}
+td{padding:9px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:nth-child(even) td{background:#fafcff}
+.fn{font-family:'JetBrains Mono',monospace;font-size:9.5pt;color:var(--navy);font-weight:600}
+.badge{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:8pt;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.b-reused{background:#e8f5e9;color:#1B5E20;border:1px solid #A5D6A7}
+.b-adapted{background:#fff8e1;color:#E65100;border:1px solid #FFE082}
+.b-new{background:#ede7f6;color:#4527A0;border:1px solid #CE93D8}
+.io{font-family:'JetBrains Mono',monospace;font-size:8.5pt;color:#555}
+code{font-family:'JetBrains Mono',monospace;font-size:9pt;background:#f0f0f8;padding:1px 5px;border-radius:3px}
+.note-box{background:#fff3e0;border-left:4px solid var(--amber);padding:12px 16px;margin:16px 0;font-size:11pt;border-radius:0 4px 4px 0}
+.note-box strong{color:var(--amber)}
+.section-note{background:#f0f4ff;border-left:4px solid var(--navy);padding:10px 16px;font-size:11pt;border-radius:0 4px 4px 0;margin-bottom:8px}
+.section-label{font-size:9.5pt;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;padding:10px 14px 6px;background:#f8f9ff;border-bottom:1px solid var(--border)}
+.key-fn td:first-child::before{content:"▸ ";color:var(--amber)}
+@media print{body{background:white}.page{padding:16px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="doc-header">
+  <h1>IntelliML — ML Core Files Explained</h1>
+  <p>Every function in every file: what it does, why it exists, and where it comes from</p>
+</div>
+
+<div class="summary-grid">
+  <div class="sum-card sum-teal">
+    <h3>23</h3><p>cleaning.py</p>
+    <div class="sub">7 reused · 4 adapted · 6 new · 6 helpers</div>
+  </div>
+  <div class="sum-card sum-coral">
+    <h3>13</h3><p>models.py</p>
+    <div class="sub">4 reused · 0 adapted · 9 new</div>
+  </div>
+  <div class="sum-card sum-purple">
+    <h3>12</h3><p>evaluation.py</p>
+    <div class="sub">3 reused · 2 adapted · 7 new</div>
+  </div>
+  <div class="sum-card sum-amber">
+    <h3>9</h3><p>pipelines.py</p>
+    <div class="sub">2 reused · 1 adapted · 6 new</div>
+  </div>
+</div>
+
+<!-- =========== CLEANING.PY =========== -->
+<div class="file-section">
+  <div class="file-header h-teal">
+    <h2>cleaning.py</h2>
+    <p>Dataset loading · statistical profiling · health score · preprocessing · auto-clean</p>
+  </div>
+  <div class="file-body">
+    <div class="role-box">
+      <strong>This file's job:</strong> Everything that happens to data <em>before</em> training. It reads the CSV, profiles it (counts problems, detects outliers, computes correlations), scores its quality, and then cleans it step by step or all at once. It is the first file that runs after upload.
+    </div>
+
+    <div class="section-label">SECTION 1 — DATA LOADING (1 function)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">load_data(filepath)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Load a CSV file from a disk path into a pandas DataFrame. Unchanged from your course.</td>
+        <td class="io">path → DataFrame</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 2 — PROFILING HELPERS (6 functions)</div>
+    <div class="section-note">These 6 functions are called by <code>profile_dataset()</code>. You never call them directly — they are internal helpers that each compute one part of the profile.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">get_column_metadata(df)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>For every column: detect its type (numerical or categorical), count missing values, compute basic stats (mean, min, max for numbers; most common value for text). This powers the Column Passport cards.</td>
+        <td class="io">df → dict per column</td>
+      </tr>
+      <tr>
+        <td><span class="fn">detect_class_imbalance(df, target)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Check whether the target column has unequal class distribution. If 80% of rows are class 0, the model will be biased. Returns class counts, percentages, and an imbalance flag. Powers the "Warning: class imbalance detected" insight card.</td>
+        <td class="io">df, column → imbalance dict</td>
+      </tr>
+      <tr>
+        <td><span class="fn">compute_correlations(df)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Compute Pearson correlation between every pair of numerical columns. Returns a nested dict used by React to render the correlation heatmap on the Diagnose page.</td>
+        <td class="io">df → dict of dicts (col→col→value)</td>
+      </tr>
+      <tr>
+        <td><span class="fn">count_outliers_per_column(df)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Count outliers in every numerical column using the IQR method. Returns a dict so the health score formula knows total outlier density. Extends the course's per-column outlier detection to all columns at once.</td>
+        <td class="io">df → {col: count}</td>
+      </tr>
+      <tr class="key-fn">
+        <td><span class="fn">profile_dataset(df, target_column)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td><strong>The most important function in the ML core.</strong> Calls all four helpers above and assembles everything into one large profiling dict. This runs automatically after every CSV upload. The result is stored in <code>Dataset.profiling_result</code> (JSONB in PostgreSQL) and is used by the health score, insight cards, and agent decisions.</td>
+        <td class="io">df → full profiling dict</td>
+      </tr>
+      <tr>
+        <td><span class="fn">compute_health_score(profiling_result)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Takes the profiling dict and computes a 0–100 quality score using four weighted sub-scores: Completeness (40%), Duplicates (20%), Outliers (20%), Class Balance (20%). Returns a dict with the overall score and each sub-score so the React gauge shows a breakdown.</td>
+        <td class="io">profiling dict → {overall, completeness, duplicates, outliers, balance}</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 3 — MISSING VALUE HANDLERS (7 functions)</div>
+    <div class="section-note">Four of these are adapted from your course. The only change: replaced <code>inplace=True</code> with <code>df = df.copy()</code>. Without this fix, the original DataFrame would be silently modified and dataset versioning would break.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">count_missing(df)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Return count of missing values per column. Returns a dict instead of a pandas Series for easy JSON serialization.</td>
+        <td class="io">df → {col: missing_count}</td>
+      </tr>
+      <tr>
+        <td><span class="fn">drop_missing_rows(df, subset, how)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Drop all rows that contain NaN values. Optionally restricted to a subset of columns. Already returned a new df in the course version — no changes needed.</td>
+        <td class="io">df → cleaned df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">fill_missing_with_mean(df, column)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>Fill NaN values in a numerical column with the column mean. Fix: replaced <code>inplace=True</code> with copy. Mean imputation is the default strategy for numerical columns in Smart Auto mode.</td>
+        <td class="io">df, col → df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">fill_missing_with_median(df, column)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Fill NaN with column median instead of mean. Median is more robust when the column has outliers (the mean gets pulled toward extreme values). Used when the agent detects high outlier density.</td>
+        <td class="io">df, col → df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">fill_missing_with_constant(df, column, constant)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>Fill NaN with a fixed value (e.g., 0, -1, or "None"). Fix: replaced inplace. Used when the user explicitly knows what the missing values should be.</td>
+        <td class="io">df, col, value → df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">fill_missing_with_interpolation(df, column)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>Fill NaN by linear interpolation between the nearest non-missing values above and below. Fix: replaced inplace. Useful for time-series style data where values should smoothly transition.</td>
+        <td class="io">df, col → df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">fill_missing_categorical(df, column, strategy, fill_value)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>Fill NaN in a text/categorical column. Strategy 'mode' fills with the most common value. Strategy 'constant' fills with fill_value. Fix: replaced inplace. Default strategy in Smart Auto mode for categorical columns.</td>
+        <td class="io">df, col → df</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 4 — OUTLIER HANDLING (3 functions)</div>
+    <div class="section-note">Directly from your course — no changes. They already return new DataFrames correctly.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">detect_outliers_zscore(df, column, threshold)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Returns a DataFrame containing only the outlier rows using the Z-Score method. A row is an outlier if its Z-Score exceeds the threshold (default 3.0). Used in profiling to show the user which rows are suspicious.</td>
+        <td class="io">df, col → df of outlier rows</td>
+      </tr>
+      <tr>
+        <td><span class="fn">remove_outliers_zscore(df, column, threshold)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Remove outlier rows using Z-Score. Returns the cleaned DataFrame without those rows. The Z-Score method works best on normally distributed data.</td>
+        <td class="io">df, col → df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">remove_outliers_iqr(df, column)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Remove outliers using Interquartile Range. Removes rows where the value is below Q1 - 1.5×IQR or above Q3 + 1.5×IQR. More robust than Z-Score for skewed data. This is the method Smart Auto mode uses by default.</td>
+        <td class="io">df, col → df</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 5 — STRUCTURAL OPERATIONS (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">drop_columns(df, columns)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Remove one or more columns from the DataFrame. Used when columns have >90% missing values (useless) or when the user manually removes them.</td>
+        <td class="io">df, [cols] → df</td>
+      </tr>
+      <tr>
+        <td><span class="fn">remove_duplicates(df)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Remove duplicate rows. Returns both the cleaned df and the count of removed rows so the system can log "Removed 3 duplicate rows" in the transparency summary. Your course had no duplicate removal function.</td>
+        <td class="io">df → (df, count_removed)</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 6 — ENCODING AND NORMALIZATION (2 functions)</div>
+    <div class="section-note">Your course only covered StandardScaler for X_train/X_test after splitting. These functions apply encoding and normalization to the entire DataFrame before the split, as part of the versioning pipeline.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">encode_categorical_columns(df, exclude_columns)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Apply LabelEncoder to all text/categorical columns, converting them to numbers. Returns the encoded df and an encoding_map (e.g., Gender: Male→1, Female→0) stored in DatasetVersion so the user can understand what was converted.</td>
+        <td class="io">df → (df, {col: {original: number}})</td>
+      </tr>
+      <tr>
+        <td><span class="fn">normalize_all_numerical(df, exclude_columns)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Apply StandardScaler to all numerical columns. Returns both the normalized df and the fitted scaler object. The scaler must be saved alongside the trained model because the What-If Simulator needs it to normalize new input values before making predictions.</td>
+        <td class="io">df → (df, scaler)</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 7 — AUTO-CLEAN ORCHESTRATION (2 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">build_auto_clean_config(profiling_result)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Read the profiling result and decide which cleaning steps to apply. This is the "brain" of Smart Auto mode's cleaning decision. Returns a config dict: whether to remove duplicates, which missing value strategy to use, whether to remove outliers. No user input needed — it decides based on data.</td>
+        <td class="io">profiling_result → config dict</td>
+      </tr>
+      <tr class="key-fn">
+        <td><span class="fn">auto_clean(df, profiling_result, target_column)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>One-call complete cleaning orchestrator. Calls build_auto_clean_config() to decide what to do, then applies all operations in sequence. Returns both the cleaned df and a human-readable summary list (the transparency log). This summary becomes the activity log shown to the user in Smart Auto mode.</td>
+        <td class="io">df, profiling_result → (cleaned_df, ["step 1...", "step 2..."])</td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- =========== MODELS.PY =========== -->
+<div class="file-section">
+  <div class="file-header h-coral">
+    <h2>models.py</h2>
+    <p>Algorithm training · task detection · model recommendation · tournament · save/load</p>
+  </div>
+  <div class="file-body">
+    <div class="role-box">
+      <strong>This file's job:</strong> Everything about training ML models. It trains individual algorithms, auto-detects which task type (classification/regression/clustering) the data needs, recommends the best algorithms with reasoning, runs the Model Tournament (all algorithms simultaneously), and saves/loads trained models for the What-If Simulator.
+    </div>
+
+    <div class="section-label">SECTION 1 — CLASSIFICATION TRAINING (4 functions)</div>
+    <div class="section-note">KNN, Decision Tree, and SVM are directly from your course. Only Random Forest is new — it is not in the course file but is the most important classifier for production use.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">train_knn(X_train, y_train, k)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Train a K-Nearest Neighbors classifier with k neighbors. Directly from course. Returns the fitted model.</td>
+        <td class="io">X_train, y_train, k → model</td>
+      </tr>
+      <tr>
+        <td><span class="fn">knn_accuracy(X_train, X_test, y_train, y_test, k)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Helper: train KNN with k and return test accuracy. Used inside get_elbow_data() in evaluation.py. Directly from course.</td>
+        <td class="io">X_train, X_test, labels, k → accuracy float</td>
+      </tr>
+      <tr>
+        <td><span class="fn">train_decision_tree(X_train, y_train, criterion)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Train a Decision Tree classifier. criterion='entropy' (information gain) or 'gini'. Directly from course. Decision Tree also provides feature importance, which evaluation.py reads.</td>
+        <td class="io">X_train, y_train → model</td>
+      </tr>
+      <tr>
+        <td><span class="fn">train_random_forest(X_train, y_train, n_estimators)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Train a Random Forest classifier (100 Decision Trees combined). This is the most important new model — it almost always wins the Model Tournament for classification. Also provides the best feature importance scores. Not in your course file.</td>
+        <td class="io">X_train, y_train → model</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 2 — REGRESSION AND CLUSTERING (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">train_logistic_regression(X_train, y_train)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Train a Logistic Regression classifier (despite the name, it is a classifier). Best for binary outcomes (yes/no, positive/negative). Simple, fast, interpretable. Good baseline model for any classification task.</td>
+        <td class="io">X_train, y_train → model</td>
+      </tr>
+      <tr>
+        <td><span class="fn">train_linear_regression(X_train, y_train)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Train a Linear Regression model for predicting numerical values (house prices, temperature, salary). Not in your course — your course only covered classifiers. Returns the fitted model used by evaluate_regression().</td>
+        <td class="io">X_train, y_train → model</td>
+      </tr>
+      <tr>
+        <td><span class="fn">train_kmeans(X, n_clusters)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Train a K-Means clustering model. No target column needed — it finds groups automatically. Used when the user selects "Discover hidden groups" as their goal. Returns both the fitted model and the cluster labels assigned to each row.</td>
+        <td class="io">X, k → (model, cluster_labels)</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 3 — INTELLIGENT MODEL SELECTION (3 functions)</div>
+    <div class="section-note">These three functions are the "intelligence layer" of the model selection step. They do not train models — they decide which models to train and why.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">detect_task_type(df, target_column)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Automatically detect whether the task is classification, regression, or clustering by analyzing the target column. If the target column has few unique values (e.g., 2 or 3) — classification. If it has many continuous values — regression. If no target — clustering. Powers the Auto Goal Detection feature.</td>
+        <td class="io">df, target_col → 'classification' | 'regression' | 'clustering'</td>
+      </tr>
+      <tr class="key-fn">
+        <td><span class="fn">recommend_models(task_type, profiling_result)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Based on the task type and dataset characteristics, return a ranked list of recommended algorithms with a plain-language reason for each. Example: "Random Forest recommended because nonlinear patterns detected and dataset has mixed feature types." This is the Model Recommendation panel on the UI.</td>
+        <td class="io">task_type, stats → [{model, reason, rank}]</td>
+      </tr>
+      <tr>
+        <td><span class="fn">get_model_by_name(algorithm_name, task_type)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>A factory function: given a string name ("random_forest", "knn", "decision_tree"), return the correct training function. This is how the agent and the tournament call the right model without a long if-else chain.</td>
+        <td class="io">"random_forest" → train_random_forest function</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 4 — TOURNAMENT AND PERSISTENCE (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr class="key-fn">
+        <td><span class="fn">run_tournament(models_list, X_train, X_test, y_train, y_test, task_type)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Run all algorithms in models_list simultaneously and return a leaderboard ranked by their main metric. This is the Model Tournament feature. The leaderboard is returned as a list of dicts: [{model, accuracy, f1, rank}]. React renders this as the live leaderboard visual.</td>
+        <td class="io">models, splits → sorted leaderboard list</td>
+      </tr>
+      <tr>
+        <td><span class="fn">save_model(model, scaler, experiment_id, base_path)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Save the trained model and its scaler to disk using pickle. Stored as experiment_{id}.pkl. The saved model is what the What-If Simulator loads when the user adjusts sliders. Without saving, predictions would not be possible after the training session ends.</td>
+        <td class="io">model, scaler, path → file_path (string)</td>
+      </tr>
+      <tr>
+        <td><span class="fn">load_model(model_path, scaler_path)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Load a previously saved model and scaler from disk. Used by the What-If Simulator endpoint in FastAPI to load the model and make predictions without retraining.</td>
+        <td class="io">paths → (model, scaler)</td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- =========== EVALUATION.PY =========== -->
+<div class="file-section">
+  <div class="file-header h-purple">
+    <h2>evaluation.py</h2>
+    <p>Metrics · confusion matrix · feature importance · elbow data · What-If Simulator</p>
+  </div>
+  <div class="file-body">
+    <div class="role-box">
+      <strong>This file's job:</strong> Everything about measuring a trained model's performance. It computes metrics per task type, extracts feature importance, generates the elbow curve data for KNN, and handles the What-If Simulator calculations. Critically: <em>no plt.show() anywhere</em> — everything returns dictionaries that React renders.
+    </div>
+    <div class="note-box">
+      <strong>Key adaptation principle:</strong> The course's <code>evaluate_model()</code> printed to the terminal and rendered a matplotlib heatmap. This file replaces that entirely. All functions return structured JSON-serializable dictionaries. The frontend does all rendering.
+    </div>
+
+    <div class="section-label">SECTION 1 — METRICS BY TASK TYPE (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr class="key-fn">
+        <td><span class="fn">evaluate_classification(model, X_test, y_test, feature_names)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>The web-API version of the course's evaluate_model(). Returns a full dict: accuracy, precision, recall, F1-score, confusion matrix (as a 2D array, not a rendered heatmap), and feature importance. React renders the confusion matrix and charts from this dict. Nothing is printed or plotted.</td>
+        <td class="io">model, test data → full metrics dict</td>
+      </tr>
+      <tr>
+        <td><span class="fn">evaluate_regression(model, X_test, y_test)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Evaluate a regression model. Returns RMSE (Root Mean Squared Error), MAE (Mean Absolute Error), and R² (how much variance the model explains). None of these are in your course file — course only covered classification metrics.</td>
+        <td class="io">model, test data → {rmse, mae, r2}</td>
+      </tr>
+      <tr>
+        <td><span class="fn">evaluate_clustering(model, X)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Evaluate a clustering model using the Silhouette Score (measures how well-separated the clusters are, from -1 to 1). Also returns cluster sizes. Not in your course file.</td>
+        <td class="io">model, X → {silhouette_score, cluster_sizes}</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 2 — METRIC HELPERS (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">get_precision(y_test, y_pred)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Return precision score. Directly from course — unchanged. Used inside evaluate_classification().</td>
+        <td class="io">true labels, predicted → float</td>
+      </tr>
+      <tr>
+        <td><span class="fn">get_recall(y_test, y_pred)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Return recall score. Directly from course — unchanged.</td>
+        <td class="io">true labels, predicted → float</td>
+      </tr>
+      <tr>
+        <td><span class="fn">get_f1(y_test, y_pred)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Return F1 score. Directly from course — unchanged.</td>
+        <td class="io">true labels, predicted → float</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 3 — EXPLAINABILITY (2 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">get_feature_importance(model, feature_names)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Extract feature importance from tree-based models (Decision Tree, Random Forest). Returns a sorted list of {feature, importance_score}. Powers the Feature Importance bar chart on the Results page and the Insight Cards ("Glucose is the #1 predictor").</td>
+        <td class="io">model, [feature names] → [{feature, score}] sorted</td>
+      </tr>
+      <tr>
+        <td><span class="fn">get_elbow_data(X_train, X_test, y_train, y_test, k_range)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>The web-API version of the course's find_best_k(). Same logic: try every k, record test accuracy. But instead of plt.show(), returns {k_values: [1..27], accuracies: [...], best_k: N}. React renders the elbow curve chart from this dict.</td>
+        <td class="io">splits → {k_values, accuracies, best_k}</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 4 — WHAT-IF SIMULATOR (2 functions)</div>
+    <div class="section-note">These two functions are what makes the What-If Simulator work. No course equivalent — they are entirely new.</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr class="key-fn">
+        <td><span class="fn">predict_what_if(model_path, scaler_path, input_dict, feature_names)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Load a saved model, apply the scaler to the user's slider values, and return a prediction with confidence. Called every time the user moves a slider. Must be fast (&lt;500ms). Returns {prediction_label, confidence, class_probabilities}.</td>
+        <td class="io">paths, slider values → {label, confidence, probabilities}</td>
+      </tr>
+      <tr>
+        <td><span class="fn">get_feature_contributions(model, input_values, feature_names)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>For one specific prediction, compute how much each feature contributed. Uses the model's feature_importances_ multiplied by the relative value of each feature. Returns a dict used by React to render the contribution radar/bar chart in the simulator.</td>
+        <td class="io">model, values, names → {feature: contribution_score}</td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- =========== PIPELINES.PY =========== -->
+<div class="file-section">
+  <div class="file-header h-amber">
+    <h2>pipelines.py</h2>
+    <p>Orchestration only · full pipeline · auto mode · step runner · summary generator</p>
+  </div>
+  <div class="file-body">
+    <div class="role-box">
+      <strong>This file's job:</strong> pipelines.py does <em>no math</em>. It orchestrates. It calls the right functions from cleaning.py, models.py, and evaluation.py in the right order and returns the results. Think of it as a film director — it does not act, it tells everyone else when to act. FastAPI calls pipelines.py for every ML operation.
+    </div>
+
+    <div class="section-label">SECTION 1 — DATA PREPARATION (3 functions, from course)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">split_features_target(df, target_column)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Split a DataFrame into X (features) and y (target). Directly from course. Lives in pipelines.py because it is step 1 of every training pipeline, not a standalone cleaning operation.</td>
+        <td class="io">df, target_col → (X DataFrame, y Series)</td>
+      </tr>
+      <tr>
+        <td><span class="fn">split_train_test(X, y, test_size, random_state)</span></td>
+        <td><span class="badge b-reused">REUSED</span></td>
+        <td>Split X and y into train and test sets. Directly from course. Lives in pipelines.py for the same reason: it is part of the training pipeline, not a data cleaning function.</td>
+        <td class="io">X, y, split ratio → X_train, X_test, y_train, y_test</td>
+      </tr>
+      <tr>
+        <td><span class="fn">scale_features(X_train, X_test)</span></td>
+        <td><span class="badge b-adapted">ADAPTED</span></td>
+        <td>Apply StandardScaler to the already-split X_train and X_test (fits on train, transforms both). From course with minor adaptation: also returns the scaler object so it can be saved for the What-If Simulator. The scaler from this function is the same one predict_what_if() uses.</td>
+        <td class="io">X_train, X_test → X_train_scaled, X_test_scaled, scaler</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 2 — PIPELINE RUNNERS (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">run_cleaning_step(df, step_name, config)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Execute one specific cleaning operation by name. Used in Guided Manual mode where the user approves each step individually. Example: run_cleaning_step(df, "fill_mean", {column: "Age"}) calls fill_missing_with_mean. Returns (cleaned_df, description_of_what_was_done).</td>
+        <td class="io">df, step_name, params → (df, description)</td>
+      </tr>
+      <tr class="key-fn">
+        <td><span class="fn">run_full_pipeline(df_path, target_column, task_type, algorithm, test_size)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>One function call that runs the complete ML pipeline: load — profile — clean — encode — normalize — split — train — evaluate — return results. This is what FastAPI calls when the user clicks "Run" in Guided mode. Returns a complete results dict that FastAPI sends to React.</td>
+        <td class="io">path, config → {metrics, feature_importance, health_score, summary, model_path}</td>
+      </tr>
+      <tr class="key-fn">
+        <td><span class="fn">run_auto_pipeline(df_path, dataset_id, target_column)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>The agent-friendly version of run_full_pipeline. Automatically detects task type, recommends and selects the best algorithm, runs the tournament, and returns everything. This is what the agent calls in Smart Auto mode. Returns all results plus an agent_decisions list documenting every decision made.</td>
+        <td class="io">path, dataset_id → {results, tournament_leaderboard, agent_decisions, summary}</td>
+      </tr>
+    </table>
+
+    <div class="section-label">SECTION 3 — UTILITY AND REPORTING (3 functions)</div>
+    <table>
+      <tr><th>Function</th><th>Type</th><th>Purpose</th><th>Input → Output</th></tr>
+      <tr>
+        <td><span class="fn">build_auto_clean_config(profiling_result)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Also available here from cleaning.py (re-exported). Read by run_auto_pipeline() before deciding cleaning steps. Determines which operations to apply based on data quality metrics.</td>
+        <td class="io">profiling dict → config dict</td>
+      </tr>
+      <tr>
+        <td><span class="fn">generate_pipeline_summary(steps_applied)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Take the list of cleaning and training steps that were applied and produce a human-readable summary dict. This is the transparency log displayed to the user in Smart Auto mode: "Step 1: Removed duplicates. Step 2: Filled 12 missing values..." Powers the "what did the agent do" panel.</td>
+        <td class="io">[steps list] → {summary_text, steps_count, operations}</td>
+      </tr>
+      <tr>
+        <td><span class="fn">compare_experiments(experiment_list)</span></td>
+        <td><span class="badge b-new">NEW</span></td>
+        <td>Take a list of experiment result dicts and produce a side-by-side comparison. Returns a structured comparison dict that React uses to render the experiment comparison table (accuracy vs accuracy, F1 vs F1, etc.).</td>
+        <td class="io">[experiment dicts] → comparison dict</td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- IMPLEMENTATION ORDER -->
+<div style="background:#1B2A6B;color:white;border-radius:8px;padding:24px 28px;margin-top:40px;">
+  <h2 style="font-size:15pt;margin-bottom:16px;">Implementation Order and Why</h2>
+  <p style="font-size:11.5pt;color:#c5cae9;margin-bottom:10px;">The order is forced by dependencies. You cannot test models without clean data. You cannot evaluate without a trained model. You cannot build a pipeline without all three.</p>
+  <ol style="padding-left:22px;font-size:11.5pt;color:#c5cae9;line-height:2;">
+    <li><strong style="color:white;">cleaning.py first</strong> — no dependencies, pure pandas/scipy. Most course functions live here.</li>
+    <li><strong style="color:white;">models.py second</strong> — depends on cleaned/split data from pipelines helpers. Course models are fast to port.</li>
+    <li><strong style="color:white;">evaluation.py third</strong> — depends on having a trained model to evaluate. Course metric functions are quick rewrites.</li>
+    <li><strong style="color:white;">pipelines.py last</strong> — only possible when all three above work independently. It chains everything.</li>
+  </ol>
+</div>
+
+</div>
+</body>
+</html>
