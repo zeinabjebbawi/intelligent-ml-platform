@@ -1,6 +1,6 @@
-# IntelliML / PRISM — Project Handoff (2026-08-19)
+# IntelliML / PRISM — Project Handoff (updated 2026-08-21)
 
-This document exists so a fresh chat can continue this project without the user re-explaining anything. Read it fully before touching code. It captures the *entire* history of what's been built, why, how it was verified, and what's still missing.
+This document exists so a fresh chat can continue this project without the user re-explaining anything. Read it fully before touching code. It **supersedes** the previous version (2026-08-20) — that version's Cleaning-page section is still accurate and is summarized here, but everything about the Encoding & Scaling page, the version-history hook, and two real production bugs is new and covered in full detail below, since almost the entire session that produced this update was spent on that page.
 
 Git identity in this repo: `zeinab jebbawi <101230180@mu.edu.lb>`. Repo root: `c:\Users\user\Desktop\Final_cp\intelligent-ml-platform`.
 
@@ -8,60 +8,43 @@ Git identity in this repo: `zeinab jebbawi <101230180@mu.edu.lb>`. Repo root: `c
 
 ## 0. How This Project Actually Gets Built — read this first
 
-The user has a **separate, parallel conversation with Claude (claude.ai chat)** where the actual feature code gets designed and generated — architecture debates, page specs, full source files. The user then pastes that conversation's content (both their own messages and Claude's responses, including full source code) into *this* session, one installment at a time, and the job here is:
+The user has a **separate, parallel conversation with Claude (claude.ai chat)** where a lot of feature *design* happens — architecture debates, page specs, full source files, UI mockup descriptions (sometimes with hand-drawn sketches or screenshots). The user pastes that conversation's content into *this* Claude Code session, and/or describes refinements directly here once something exists, and/or reports bugs found by actually using the running app in a browser. The job here, every time:
 
-1. Read and genuinely understand the pasted chat (not just skim for code blocks).
-2. Transcribe/integrate any real code into this actual project.
-3. **Actually test everything live** — start real servers, hit real endpoints with curl, run real datasets through it, render real React components against a live backend. Never just trust that pasted code works.
-4. Fix real bugs found during testing (see §11 — there is a recurring bug class).
-5. Report back in a specific format the user always expects: **what was missing, what I did, whether it's fully done, and what already existed / I didn't need to touch.**
+1. Read and genuinely understand whatever is pasted or described — not skim for code blocks.
+2. Transcribe/integrate real code into the actual project, **adapting it to this repo's actual architecture** where the pasted design assumed something that doesn't exist here. This happened concretely this session: a pasted `Encoding.jsx` spec expected `getDisplayPath`/`registerVersion`/`isStepDone` as props from a parent, but no such parent-level version-history state existed anywhere in this repo (`Cleaning.jsx` keeps that logic entirely internal to itself) — the fix was building a new shared hook (`frontend/src/hooks/useVersionHistory.js`), not blindly wiring undefined props.
+3. **Actually test everything live** — start real servers, hit real endpoints with curl, run real datasets through it, render real React components against a live backend via temporary Vitest integration tests (written, run, then **deleted** — never committed). Never just trust that pasted or newly-written code works. This session repeatedly proved its worth: a "bug" that looked like a timing issue in a test turned out to be an RTL text-matching limitation (see §11.4), and a user-reported "Failed to fetch" turned out to be a real backend crash with a subtle CORS side effect (see §11.3) — neither would have been found by reading code alone.
+4. Fix real bugs found during testing, including bugs in pasted code (there is a well-established recurring bug class in this project — see §13).
+5. Report back in the format the user always expects: **what was missing, what was done, whether it's fully done, and what already existed / didn't need touching.**
+6. **Distinguish "implement this" from "just diagnose this."** If the user says something like "I don't want you to do anything on the platform, just understand the problem and tell me exactly what is happening" — that is a hard boundary. Write temporary throwaway tests to empirically confirm hypotheses, report root causes precisely with file/line references, and do **not** touch production code, even if the fix looks obvious. Wait to be asked. (This happened in an earlier session for the Outliers-tab bugs; this session's work was implementation-mode throughout, always explicitly requested.)
+7. When scope is ambiguous or a request bundles very differently-sized pieces of work, ask a clarifying scoping question rather than guessing.
+8. **Investigate root causes, don't hide symptoms.** When the user explicitly asks "investigate the actual cause rather than simply hiding the error message" (this happened this session, verbatim, for the Apply-button bug), that means: read server logs, reproduce via curl, trace the exact mechanism, and fix the actual defect — not wrap it in a try/except that swallows the message, and not just report "here's a workaround."
 
-**Critical known issue**: text pasted into this chat sometimes arrives with corrupted encoding — em dashes, arrows, checkmarks, bullets all collapse into mojibake sequences like `â`, `Â·`, `Ã`, `ð` (a UTF-8-interpreted-as-Latin-1 corruption where the *second and third bytes of multi-byte characters often become invisible control characters and are lost*, not just mis-decoded — meaning a simple encoding round-trip cannot always recover them). When this happens the fix is contextual reconstruction (infer whether `â` means an arrow "→" or an em dash "—" from surrounding words), verified by checking zero suspicious characters remain before saving.
-
-**Important discovery from the most recent installment**: when the user references a file via `<ide_opened_file>` (i.e., it's open in their IDE, usually from `Downloads\Telegram Desktop\`), **check the actual file on disk before assuming it's corrupted** — the disk copy is sometimes perfectly clean UTF-8 even when the same content pasted into the chat body got mangled. Use `xxd` or a Python byte check on the real file path first; only do mojibake reconstruction if the disk copy is also corrupted or no disk copy exists.
-
-**When the user asks to "add the backend from this chat"**: they mean literally transcribe what was pasted. Don't invent replacement architecture. But if live testing surfaces a genuine bug the pasted code has (see §11's recurring NaN/numpy-type bug), fix it and *say so clearly* rather than either silently deviating or blindly reintroducing a known crash.
-
-**When something is ambiguous or the scope is unclear/enormous** (this happened once — a message described a whole Cleaning page but only pasted a *summary* of the code, not the code itself, and referenced a routing system that doesn't exist in this project): stop and ask via a clarifying question rather than guessing or authoring a huge amount of original code unprompted. The user appreciated this — they confirmed they had the real code and pasted it next message.
+**Known encoding issue**: text pasted into chat sometimes arrives with corrupted encoding (mojibake — `â`, `Â·`, `Ã` etc. replacing em dashes, arrows, bullets, stars, checkmarks). This happened again this session for `encoding_router.py` and `Encoding.jsx` (pasted directly as chat documents, no disk copy to fall back on). Fixed by contextual reconstruction: long runs of `â` are box-drawing section dividers (`─`), isolated `â` between words is usually an em dash (`—`), and specific byte-math patterns reliably identify specific symbols once you know the trick — e.g. `â¦` is an ellipsis (`…`), `â¼` is a down-triangle (`▼`), `âº` is a redo arrow (`↺`), `â¬` is a download arrow (`⬇`), a lone `â` with nothing following is very often a symbol whose UTF-8 continuation bytes both happened to be invisible C1 control codes when misread as Latin-1 (e.g. `★`, `✓`, `✕`, `⚖`, `✎`, `ⓘ` all reduce to bare `â`). When reconstructing, prefer symbols already established elsewhere in this exact codebase's icon vocabulary (`★` for suggestions, `✓`/`↺`/`⬇` matching `Cleaning.jsx`'s conventions) over guessing something novel.
 
 ---
 
 ## 1. What IntelliML / PRISM Is
 
-A capstone ML platform (branded "IntelliML" in early docs, "PRISM" in the newest backend files — same project, name may still be in flux). Two user-facing modes:
+A capstone ML platform (branded "IntelliML" in early docs, "PRISM" in the frontend UI itself — same project). Two user-facing modes:
 
 - **Smart Auto mode**: user uploads data, the system does everything (cleaning, model selection, training, evaluation) automatically and explains what it did.
 - **Guided/Manual mode**: user configures every step themselves, with rule-based/explanatory help, not automated decisions.
 
-### Platform Philosophy (verbatim rules — these govern every future page, not just Cleaning)
+### Platform Philosophy (verbatim rules — govern every page)
 
 **What it is NOT**: not primarily a training platform; not a tool that hides complexity and hands over answers; not a copy of WEKA (a full redesign of the workflow experience); does not reach ahead into future pipeline stages to generate suggestions on an earlier page.
 
 **What it IS**: a complete ML workflow environment that preserves the full analytical process; helps users understand what they're doing and why; keeps analytical space open for the user to reason and decide; an enhancement of WEKA's logic with better clarity, guidance, and modern UI.
 
-**Three internal user types** (not exposed in the UI — the UI only ever shows "Manual" or "Auto"):
-- **Non-technical user** → chooses Auto Mode. System does the work, explains it, delivers readable results.
-- **Learner** → chooses Manual Mode. Wants deep visual analysis and guided decision-making; wants explanations/visualizations/statistics/recommendations that help them reason, not think for them.
-- **Expert** → chooses Manual Mode. Already knows ML; benefits from intelligent rule-based suggestions without losing control; wants full visibility into every parameter.
+**Three internal user types** (not exposed in the UI — the UI only ever shows "Manual" or "Auto"): Non-technical user → Auto Mode. Learner → Manual Mode (deep visual analysis, guided decision-making). Expert → Manual Mode (rule-based suggestions without losing control, full parameter visibility).
 
-**Six global rules that apply to the entire platform:**
-
-1. **Suggestion Discipline** — not every page needs AI suggestions; some only need explanatory guidance. Where suggestions do appear:
-   - *Level 1 — Explanatory text only*: describe what data/metric means, no action recommended.
-   - *Level 2 — Rule-based suggestions*: simple if/else logic on data properties (e.g. "X% missing — consider imputation"). No AI needed. **This is the level the Cleaning page's normality-based IQR/Z-Score suggestion operates at.**
-   - *Level 3 — AI-based suggestions*: only in deliberately chosen places, not applied everywhere by default.
-
-2. **No Reaching Forward** — every suggestion on a page must be derivable *only* from that page's own data/state. A page may never use a later stage's results to suggest something on an earlier stage. Explicitly rejected example: using a trained model's SHAP output to suggest feature removal on a pre-training Feature Selection page.
-
-3. **The "Try-See-Decide" Loop** — applies only to pages explicitly marked with it. On those pages: user makes a choice, immediately sees before/after on the *same screen*, can approve or try something else — without navigating away. Presentation is flexible (inline/side panel/drawer/etc.) but page navigation to see a result is non-negotiable-forbidden. **The Cleaning page's Outliers tab (threshold sliders recompute the chart instantly, no navigation) is a live example of this rule in action.**
-
-4. **Dataset Versioning** — every significant transformation creates a *named, non-overwritten* dataset version the user can inspect/compare/roll back to. Minimum named versions: Original Dataset, Duplicate Removed, Outliers Removed, Missing Values Imputed, Encoded and Scaled, Feature Selected Version, Sampled Version. Applies platform-wide.
-
-5. **Mode Differences** — two exposed modes, Manual and Auto. Manual: user configures every step. Auto: agent does it, user approves/observes. In Manual mode, pages 5–8 collapse into one "Smart Preprocessing" page for Auto. Same underlying ML logic runs in both — the difference is *who* configures it.
-
-6. **ML Methodology Source** — canonical reference for all implementation decisions is `AllFunctions.ipynb` combined with `v6.0-InternProject.html` (external files the user has, not in this repo). These govern preprocessing order/hierarchy, algorithm choices/parameters, evaluation methods, visualization types, logical sequence. The platform borrows the *mindset and hierarchy*, not every specific technical choice (example given: ADASYN was in the reference but was NOT adopted here).
-
-The Cleaning page (§9 below) is "Step 5 of 11" per its own header — meaning an 11-step journey map exists in the user's other conversation, not yet shared here.
+**Six global rules:**
+1. **Suggestion Discipline** — Level 1 (explanatory text only) / Level 2 (rule-based if/else, e.g. Cleaning's normality-based Z-score/IQR suggestion, or Encoding's "★ suggested" encoder/scaler picks) / Level 3 (AI-based, only in deliberately chosen places).
+2. **No Reaching Forward** — a page's suggestions must derive *only* from that page's own data/state, never a later stage's results.
+3. **The "Try-See-Decide" Loop** — on pages explicitly marked with this rule, user choice → immediate before/after on the *same screen*, no navigation. Example on Encoding: the encoding/scaling dropdowns immediately update the "Modified Columns" preview table with real backend-computed before→after values, no page navigation, no separate "preview" step.
+4. **Dataset Versioning** — every significant transformation creates a *named, non-overwritten* dataset version, inspectable/comparable/rollback-able. Fully implemented full-stack feature (Django `DatasetVersion` model + `versionsAPI` +, this session, a reusable frontend hook — see §8).
+5. **Mode Differences** — same underlying logic runs in both modes; Manual configures every step, Auto does it automatically.
+6. **ML Methodology Source** — `AllFunctions.ipynb` + `v6.0-InternProject.html` (external, not in this repo) govern preprocessing order/hierarchy, algorithm choices, eval methods.
 
 ---
 
@@ -73,242 +56,348 @@ React (Vite, :5173)  ⇄  Django (:8080)  ⇄  PostgreSQL
    FastAPI (:8001)  ⇄  ml-core (plain .py, no server)
 ```
 
-- **Django** (`backend-django/`) — accounts, auth (JWT), projects, file upload, the only service allowed to touch PostgreSQL directly.
-- **FastAPI** (`backend-fastapi/`) — all ML computation. Never touches PostgreSQL. Two routers: the original 10-endpoint ML pipeline router in `main.py`, plus the newer 9-endpoint `cleaning_router.py`.
-- **ml-core/** (project root, sibling to the backend folders) — plain Python modules (`cleaning.py`, `models.py`, `evaluation.py`, `pipelines.py`), no FastAPI code inside it, imported only by FastAPI. Not the same code as `cleaning_router.py` (see §8.5 — intentional, not a bug).
-- **React** (`frontend/`) — Vite + React 19. Talks to Django for accounts/projects/upload, directly to FastAPI for all ML/cleaning work.
+- **Django** (`backend-django/`) — accounts, JWT auth, projects, file upload, dataset version history + workflow/step-memory. Only service allowed to touch PostgreSQL directly.
+- **FastAPI** (`backend-fastapi/`) — all ML computation. Never touches PostgreSQL. `main.py` (10-endpoint original ML pipeline router) + `cleaning_router_v2.py` (9-endpoint Cleaning-page backend) + `encoding_router.py` (**new this session**, 4-endpoint Encoding & Scaling backend).
+- **ml-core/** (project root, sibling to backend folders) — plain Python modules, no FastAPI code inside, imported only by FastAPI. **Untouched this session and the one before it.**
+- **React** (`frontend/`) — Vite + React 19. Talks to Django for accounts/projects/upload/version-history/workflow, directly to FastAPI for all ML/cleaning/encoding work.
 
-Two **separate Python venvs** exist — `backend-django/.venv` and `backend-fastapi/.venv` — with separate `requirements.txt` files. A package needed by Django code (e.g. `requests`, added so Django can call FastAPI) must be installed into Django's venv specifically, and vice versa for ML packages.
+Two separate Python venvs: `backend-django/.venv`, `backend-fastapi/.venv`.
 
-### Why Django ↔ FastAPI, not one monolith
-Django is the "building manager" (accounts, storage, records); FastAPI is the "lab technician" (only computation). Keeps heavy ML deps (numpy/pandas/scikit-learn/scipy) out of Django's world entirely. Communication is plain HTTP via Python's `requests` library from Django, wrapped in `try/except` so **FastAPI being offline never breaks Django** — uploads still succeed, just without profiling.
+**Critical environment fact discovered this session, applies to all future work**: on this machine, `localhost` resolves to **both** `::1` (IPv6) and `127.0.0.1` (IPv4) — confirmed via `nslookup localhost`. All backends here only bind IPv4. Any URL in this codebase that says `http://localhost:PORT` is a landmine: if a browser's `fetch()` happens to pick the IPv6 address, the connection fails outright and the browser reports a bare, uninformative `TypeError: Failed to fetch`. **Every new file that needs to reach Django or FastAPI must use the `127.0.0.1` literal, not `localhost`.** See §11.2 for the full story and the exact list of files already fixed.
 
 ---
 
-## 3. ⚠️ Current Git State — NOTHING IS COMMITTED YET
+## 3. Current Git State (verify fresh — this changes every session)
 
-Every single change described in this document (all of Steps 3–10+ of the whole session) is **still sitting as uncommitted working-tree changes**. `git log` only shows 5 pre-existing commits from before this session started (`ac651b3` initial structure through `847f4c5`). Run `git status` immediately in a new session to confirm this is still true — if the user has committed since, treat this section as historical only.
+Last commit: `057ee89 "Update full-stack ML platform"` (user-authored, landed almost everything from two sessions ago). As of the end of **this** session:
 
-Do not assume anything is "saved" beyond the filesystem. Recommend committing to the user if a natural checkpoint arrives, but per standing instructions **never commit unless explicitly asked**.
+```
+Changes not staged for commit:
+	modified:   backend-django/core/settings.py       (this session — CORS 127.0.0.1 origins added)
+	modified:   backend-django/datasets/views.py       (this session — one-line localhost->127.0.0.1 fix)
+	modified:   backend-fastapi/cleaning_router_v2.py  (NOT this session — pre-existing uncommitted diff from an earlier session, unchanged by this one; contains the already-fixed Outliers-tab bugs, see §11.1)
+	modified:   backend-fastapi/main.py                (this session — encoding_router registered, CORS origins added)
+	modified:   docs/PROJECT_HANDOFF.md                (this file, this session)
+	modified:   frontend/src/App.jsx                   (this session — 'encoding' stage wired in)
+	modified:   frontend/src/api.js                    (this session — localhost->127.0.0.1 fix)
+	modified:   frontend/src/pages/Cleaning.jsx         (this session — ONE line: the API constant's localhost->127.0.0.1 fix. Nothing else in this file was touched — it remains the heavily-tested, self-contained version-history page described in §9.)
+	modified:   frontend/src/pages/Diagnose.jsx         (NOT this session — pre-existing uncommitted diff from before this session, origin unclear/external, this session only ever READ this file to extract the TopNav component, never wrote to it)
+
+Untracked files:
+	backend-fastapi/encoding_router.py   (NEW this session)
+	frontend/src/hooks/                  (NEW this session — useVersionHistory.js)
+	frontend/src/pages/Encoding.jsx      (NEW this session)
+```
+
+Run `git status` / `git log --oneline -8` fresh at the start of the next session — do not trust this table, it's a snapshot.
 
 ---
 
 ## 4. Backend: Django (`backend-django/`)
 
-### Apps and models (Step 3 of the original build sequence)
-- **`accounts`** — `UserProfile` (OneToOne with Django's `User`). `experience_level` choices are **only `beginner` / `expert`** — the user explicitly had me remove `intermediate` early on (beginner → Auto mode, expert → Manual mode is the intended mapping). Auto-created via `post_save` signal on `User`.
-- **`projects`** — `Project` (UUID PK, `mode`: guided_manual/smart_auto, `status`: active/completed/archived) and `WorkflowState` (OneToOne with Project — exactly one state per project; `current_step`, `step_data` JSONField, `completed_steps` JSONField list).
-- **`datasets`** — `Dataset` (UUID PK, FK→Project, `profiling_result` JSONField, `health_score` FloatField, `status`: uploaded/profiling/profiled/error) and `DatasetVersion` (FK→Dataset, `version_number`, `version_type`: original/cleaned/encoded/normalized, `unique_together` on dataset+version_number).
-- **`experiments`** — `Experiment` (FK→Project, FK→DatasetVersion via `SET_NULL`), `AgentDecision`, `InsightCard`, `WhatIfSimulation`, `Report` — all FK'd appropriately, all UUID PKs, metrics/context stored as JSONField.
+**Unchanged this session** except two `127.0.0.1` literal fixes (see §11.2):
+- `core/settings.py` — `CORS_ALLOWED_ORIGINS` gained `http://127.0.0.1:5173` and `http://127.0.0.1:3000` alongside the existing `localhost` variants (both kept, in case something still loads via the `localhost` origin).
+- `datasets/views.py` — the Django→FastAPI server-to-server call to `/ml/profile` inside `DatasetUploadView` now targets `http://127.0.0.1:8001/ml/profile` instead of `localhost`.
 
-**Design rationale** (explained at length to the user, worth remembering if asked again): UUIDs prevent ID-enumeration attacks; JSONField avoids dozens of mostly-null columns for task-type-specific metrics; `DatasetVersion` as its own table (not overwriting) is what makes rollback/reproducibility possible — this is the DB-level expression of Global Rule 4 above.
-
-All migrations exist and were actually applied (`makemigrations` + `migrate`) against a real PostgreSQL database the user set up themselves — confirmed via a live upload test where `Dataset.profiling_result` was verified populated directly from the DB.
-
-### `datasets/views.py` — `DatasetUploadView`
-Full upload flow: verify project ownership → save file to `media/datasets/user_<id>/project_<id>/original.csv` → read with pandas for `columns_metadata` → create `Dataset` row → **call FastAPI's `/ml/profile`** wrapped in try/except (ConnectionError caught separately from generic Exception; either way upload still succeeds, `profiling_done: false` returned) → create `DatasetVersion` v1 "original" → return response including a `preview` of the first 5 rows.
-
-**Bug fixed here (recurring pattern, see §11)**: the preview must use `json.loads(df.head(5).to_json(orient='records'))`, **not** `.to_dict(orient='records')` — the latter leaves raw `NaN` in the dict, which Python's `json` encoder rejects with `ValueError: Out of range float values are not JSON compliant`. This exact bug pattern recurred **three separate times** across the session (Django preview, ml-core's `detect_class_imbalance` via `numpy.bool_`, and `cleaning_router.py`'s `profile_duplicates`) — always fixed by casting to native Python types or round-tripping through `.to_json()`.
-
-`datasets/urls.py` was **split into two files** to fix a real routing bug: originally both the upload route and the detail route were mounted via the same `include()` under two different URL prefixes, meaning each accidentally also existed under the other's prefix with the wrong/missing kwargs (would 500 if ever hit). Now:
-- `datasets/urls.py` → only `DatasetDetailView`, mounted under `/api/datasets/`.
-- `datasets/upload_urls.py` → only `DatasetUploadView`, mounted under `/api/projects/<uuid:project_id>/datasets/`.
-Verified live: both intended routes still work, both previously-broken combinations now correctly 404 instead of 500.
-
-### CORS — was broken, now fixed
-`corsheaders` was in `INSTALLED_APPS` since an early step but **`CorsMiddleware` was never added to `MIDDLEWARE`**, and `CORS_ALLOWED_ORIGINS` was never set — Django was silently rejecting all cross-origin requests from React this whole time; it just never surfaced because nothing had called Django from a browser yet. Fixed in `core/settings.py`:
-```python
-MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware',   # must be this early
-    ...
-]
-CORS_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:3000']
-```
-Verified live with curl using `Origin` headers — allowed origin gets `Access-Control-Allow-Origin` back, disallowed origin doesn't.
-
-### JWT (SimpleJWT)
-Registration sets Django's `username` = the user's email. Access token: 24h. Refresh token: 7 days, **rotates** on every refresh (`ROTATE_REFRESH_TOKENS: True`). Endpoints: `/api/auth/register/`, `/api/auth/login/` (body key is `username`, even though it's an email), `/api/auth/token/refresh/`, `/api/auth/profile/`.
-
-### requirements.txt — recurring encoding issue
-`backend-django/requirements.txt` (and `backend-fastapi/requirements.txt`, and the mojibake in every pasted code file) is part of the same root cause: **files were repeatedly found saved as UTF-16 instead of UTF-8** — this was fixed multiple times (each time it silently reverted; always re-check encoding with `xxd` before trusting `cat`/`Read` output looks right, especially after any tool that might rewrite the file). Current confirmed packages: `asgiref`, `Django==6.0.5`, `django-cors-headers==4.9.0`, `djangorestframework`, `djangorestframework_simplejwt`, `numpy`, `pandas`, `psycopg2-binary` (swapped from plain `psycopg2` — no C compiler available for the source build), `PyJWT`, `python-dateutil`, `python-dotenv`, `requests==2.32.3` (added for the FastAPI bridge), `six`, `sqlparse`, `tzdata`.
-
-### `.env` / `.env.example`
-`backend-django/.env` exists with real DB credentials (user created it themselves, verified working — `migrate` reports "no migrations to apply" against a live DB). `.env.example` committed instead with just key names: `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`.
+Everything else (apps: `accounts`, `projects`, `datasets`, `experiments`; models; the full Dataset Version History + Step Memory system described in §8; JWT; CORS middleware ordering) is unchanged from the 2026-08-20 handoff and still accurate. Read that content below in §8 if touching version-history code.
 
 ---
 
 ## 5. Backend: FastAPI (`backend-fastapi/`)
 
-### `main.py` — original 10-endpoint ML pipeline router
-`GET /health`, `POST /ml/profile`, `/ml/recommendations`, `/ml/clean/auto`, `/ml/clean/step`, `/ml/train`, `/ml/auto`, `/ml/elbow`, `/ml/what-if/predict`, `/ml/what-if/contributions`. All wired to `ml-core` functions (imported via `sys.path.insert` pointing at the sibling `ml-core/` folder — the exact mechanism is documented in `docs/architecture_deep_dive.html` §2). Every endpoint tested live over real HTTP with a real messy CSV — all pass, including error paths.
-
-### `cleaning_router.py` — NEW, added this session, 9 endpoints under `/cleaning/`
-This is the backend for the Cleaning page specifically (see §9). Registered into `main.py` via:
+### `main.py`
+Unchanged 10-endpoint original ML pipeline router, plus this session's additions:
 ```python
-from cleaning_router import router as cleaning_router
+from cleaning_router_v2 import router as cleaning_router
+from encoding_router import router as encoding_router
+...
 app.include_router(cleaning_router)
+app.include_router(encoding_router)
 ```
-Full endpoint table is in §9.2. **Bug fixed**: `profile_duplicates` had the exact same raw-NaN-via-`.to_dict()` bug described above — fixed the same way (`json.loads(df.to_json(...))`).
+CORS `allow_origins` list expanded to include `127.0.0.1` variants for `:5173`, `:3000`, `:8080` alongside the existing `localhost` ones (see §11.2 for why).
 
-**Architectural note, not a bug**: `cleaning_router.py` has its own self-contained helpers (`check_normality`, `base_stats`, `save_version`) that are separate from and do not reuse `ml-core/cleaning.py`'s equivalents (which also has a `check_normality`). This is a real duplication — worth a future refactor to unify them — but was left as-is since it wasn't asked to be merged and both independently work correctly (verified by testing both).
+### `cleaning_router_v2.py` — untouched this session
+Confirmed via live curl testing at the start of this session that the four previously-diagnosed Outliers-tab bugs (stale threshold, Remove-All stat drift, histogram downsampling, stale badges) are **already fully fixed** in the current file, including the `POST /cleaning/get-all-outlier-indices` endpoint. See §11.1 for the verification details. No code was changed here this session — only verified.
 
-### Sample data
-`backend-fastapi/sample_data/sample.csv` — a generated demo CSV (250 rows, has duplicates, one outlier in an otherwise normal column, one outlier in a skewed column, missing values in two columns) created so the user has something to immediately load into the Cleaning page. **Gitignored** (`backend-fastapi/sample_data/` added to `.gitignore`) since it's random generated test data, not source.
+### `encoding_router.py` — **NEW this session, then bug-fixed later in the same session**
 
-### `.env` / `.env.example`
-No real `.env` created yet (nothing currently needs `DEEPSEEK_API_KEY`). `.env.example` has just `DEEPSEEK_API_KEY=your_key_from_supervisor_here`.
-
----
-
-## 6. `ml-core/` — plain Python ML logic (project root)
-
-Four files, no `.venv` of its own — imported by FastAPI's venv. Built across several installments; all four are complete:
-
-- **`cleaning.py`** (23 functions, 7 sections): `load_data`, profiling helpers (`get_column_metadata`, `detect_class_imbalance`, `compute_correlations`, `count_outliers_per_column`, `profile_dataset`, `compute_health_score`), missing-value handlers (course-derived, all fixed to `df.copy()` instead of `inplace=True` — critical for dataset versioning), outlier handling (`check_normality` using Shapiro-Wilk/D'Agostino, `detect_outliers_zscore`, `remove_outliers_zscore`, `remove_outliers_iqr`), structural ops, encoding/normalization, and `build_auto_clean_config` + `auto_clean` (the Auto-mode orchestrator — decides Z-score vs IQR **per column** based on that column's own normality test, not a single global choice).
-- **`models.py`** (13 functions): train every algorithm (KNN, Decision Tree, Random Forest, Logistic/Linear Regression, SVM, K-Means), `detect_task_type`, `recommend_models` (with plain-language reasons, excludes KNN/SVM above dataset-size thresholds), `get_model_by_name` factory, `run_tournament` (survives a single algorithm failing without crashing the whole run), `save_model`/`load_model`.
-- **`evaluation.py`** (12 functions): `evaluate_classification/regression/clustering`, `get_precision/recall/f1`, `get_feature_importance`, `get_elbow_data`, `predict_what_if`, `get_feature_contributions` (What-If Simulator support).
-- **`pipelines.py`** (8 functions): pure orchestration, no math of its own — `split_features_target`, `split_train_test`, `scale_features`, `run_cleaning_step` (Guided mode, one atomic op at a time), `run_full_pipeline`, `run_auto_pipeline` (Auto mode, returns `agent_decisions` transparency log), `generate_pipeline_summary`, `compare_experiments`.
-
-**Bug fixed**: `detect_class_imbalance` in `cleaning.py` computed `is_imbalanced` via a numpy comparison, producing `numpy.bool_` (not JSON serializable) — fixed with explicit `bool(...)` cast, plus hardened two adjacent fields with `float()`/`int()` for the same reason.
-
-**Package setup**: flat structure confirmed correct by the user's other conversation (NOT a nested `ml_core/` package — that was a mistake in an earlier message, corrected). `setup.py` uses `py_modules=['cleaning','models','evaluation','pipelines']`, installed via `pip install -e .` from inside `ml-core/` with FastAPI's venv active. **`ml-core/__init__.py` exists but is dead code** — confirmed by testing that `import ml_core` fails (`No module named 'ml_core'`) since `ml-core` has a hyphen and can never be imported as a package under that name; everything actually goes through direct `from cleaning import ...` style imports. Harmless, just worth knowing if asked why it's unused.
-
-All four files were validated by **actually running** `run_full_pipeline` and `run_auto_pipeline` end-to-end against a realistic messy synthetic dataset (missing values, duplicates, an outlier, categorical column, imbalanced target) — every mode (specific algorithm, `'tournament'`, `'knn'` triggering the elbow curve), every Guided-mode atomic step, and both utility functions all passed.
-
----
-
-## 7. Frontend (`frontend/`) — migrated from CRA to Vite this session
-
-The user explicitly asked to replace Create React App with Vite. Full migration completed and verified:
-
-- Removed: `react-scripts`, `web-vitals`, `public/index.html`, `src/index.js`, `src/App.js`, `src/App.test.js`, `src/reportWebVitals.js`.
-- Added: `vite`, `@vitejs/plugin-react`, **Vitest** (replacing Jest, since Vite has no built-in test runner) — `frontend/index.html` (Vite's entry point, now at project root, not `public/`), `src/main.jsx`, `vite.config.js` (declares `server.port: 5173` explicitly, and the Vitest `test` block: `environment: 'jsdom', globals: true, setupFiles: ['./src/setupTests.js']`).
-- `package.json` scripts are now `dev` / `build` / `preview` / `test` (not `start`/`eject`). `"type": "module"` added.
-- Fresh `npm install` went from CRA's 1319 packages down to **280** (later 320 once `recharts` was added for the Cleaning page).
-- Verified live: `npm run dev` serves correctly on **port 5173** (auto-increments to 5174+ if occupied — this happened once from a leftover stray process; killing it and restarting fixed it), `npm run build` produces a working production bundle, `npm test` (Vitest) passes.
-
-### `src/api.js`
-Two `axios` instances — `djangoAPI` (baseURL `:8080`) and `mlAPI` (baseURL `:8001`). `djangoAPI` has a request interceptor that reads `access_token` from `localStorage` and attaches `Authorization: Bearer <token>` automatically; `mlAPI` deliberately has no such interceptor (FastAPI endpoints don't require login). Exports `authAPI`, `projectsAPI`, `datasetsAPI`, `mlOpsAPI` as pre-built call functions. Verified via a real Jest/Vitest smoke test (since deleted after confirming it passed) that every export resolves and baseURLs are correct.
-
-### `src/setupTests.js`
-Imports `@testing-library/jest-dom/vitest`. **Also now includes a `ResizeObserver` polyfill** — jsdom doesn't implement this Web API, but Recharts' `<ResponsiveContainer>` requires it and throws `ResizeObserver is not defined` without the stub. This was discovered while testing the Cleaning page and is now a permanent, reusable fix for any future chart-heavy page tested in this project.
-
-### `src/App.jsx` — currently a TEMPORARY harness, not the real app
-No routing system exists in this project yet. The real `App.jsx`/`JourneyMap.jsx` routing code lives in the user's other conversation and has not been pasted here. Current `App.jsx` is explicitly commented as temporary: a form where the user types a CSV file path that already exists on disk, then renders `<CleaningPage projectData={{filePath}} onNext={...} onUpdateData={...} />` directly. This exists purely so the user can view/use the real Cleaning page in a browser. **Replace this file wholesale, don't merge into it, once the real routing code is provided.**
-
-`src/App.test.jsx` was updated to match (tests the loader form renders, not the old CRA "Learn React" link).
-
----
-
-## 8. Package/dependency state — exact current versions
-
-**`frontend/package.json`** dependencies: `axios@^1.7.9`, `react@^19.2.6`, `react-dom@^19.2.6`, `recharts@^2.15.0` (note: recharts 2.x is EOL/deprecated upstream in favor of v3 — installed 2.x deliberately since `Cleaning.jsx`'s API usage matches v2 shapes; a future v3 migration is a known possible upgrade, not urgent). devDependencies: testing-library packages, `@vitejs/plugin-react`, `jsdom`, `vite@^6.0.7`, `vitest@^2.1.8`. **`lucide-react` is NOT installed and NOT needed** — despite the originating chat's integration notes mentioning it, `Cleaning.jsx` actually uses plain Unicode/emoji characters for icons, not lucide-react components.
-
----
-
-## 9. THE CLEANING PAGE — full detail (explicitly the part the user most wants remembered)
-
-### 9.1 What it is and where it fits
-"Step 5 of 11" in the (not-yet-shared) journey map. Backend: `backend-fastapi/cleaning_router.py`. Frontend: `frontend/src/pages/Cleaning.jsx` (~1450 lines), default export `CleaningPage`. Called with props `{ projectData: { filePath }, onNext, onUpdateData }` — `onNext('encoding', { cleanedFilePath: filePath })` is what it calls when the user clicks through to the next stage (an Encoding & Scaling page that does not exist yet).
-
-Both files were pasted into the chat with corrupted encoding, but **the actual files on the user's disk (`Downloads\Telegram Desktop\cleaning_router (1).py` and `Cleaning (1).jsx`) were perfectly clean UTF-8** — copied directly from disk rather than reconstructed. This is the case referenced in §0's "check disk first" note.
-
-### 9.2 Backend endpoints (`cleaning_router.py`, prefix `/cleaning`)
+Prefix `/encoding`. Backs the Encoding & Scaling page (§10). Four endpoints:
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/cleaning/profile-duplicates` | POST | Scan for duplicates; returns full row preview (first 2000 rows) with a `_is_dup` flag per row, plus counts |
-| `/cleaning/remove-duplicates` | POST | Drops all duplicates, saves `..._dup_removed.csv` |
-| `/cleaning/profile-outliers-global` | POST | Per-column normality test (Shapiro-Wilk n≤5000 / D'Agostino-Pearson n>5000) → suggests zscore/iqr per column; PCA (2 components) + IsolationForest on a 600-row sample for the scatter plot; outlier score index plot |
-| `/cleaning/profile-outliers-column` | POST | Full detail for one column: stats (mean/std/median/Q1/Q3/IQR/min/max + pre-computed default bounds), suggested method + p-value, all values (all outliers kept + up to 1500 sampled normals), histogram bins |
-| `/cleaning/remove-outliers` | POST | Drops a specific, user-chosen list of row indices (not "all outliers" — see §9.4), saves `..._outliers_removed.csv` |
-| `/cleaning/profile-missing-global` | POST | Bar chart data per column (present/missing/%/type), missing matrix (sampled to 250 rows), row-completeness distribution |
-| `/cleaning/apply-row-threshold` | POST | `df.dropna(thresh=min_present)` — drops rows with too many missing values, saves `..._rows_filtered.csv` |
-| `/cleaning/apply-missing-column` | POST | Per-column imputation: `mean` \| `mode` \| `knn` (via `KNNImputer`) \| `interpolation` \| `drop_rows` \| `drop_column`. Saves `..._missing_imputed.csv` |
-| `/cleaning/download` | GET | Streams the CSV at a given `file_path` back as a file download with a custom `filename` |
+| `/encoding/profile` | POST | Analyse a dataset: per-column `inferred_type` (`numeric`/`categorical`), `suggested_encoding`/`suggested_scaler` + plain-language reason, stats for numeric columns, `display_rows` (first 50 rows, NaN→`""`) |
+| `/encoding/encode-column` | POST | Preview one column's encoding (`label` or `one_hot`) without saving — returns a `mapping` (label) or `one_hot_columns` (one-hot, each with its own preview) |
+| `/encoding/scale-column` | POST | Preview one column's scaling (`minmax`/`standard`/`robust`) without saving — fits on the full column, returns before→after pairs for the first 50 rows |
+| `/encoding/apply` | POST | Applies a full batch of `encoding_decisions` + `scaling_decisions` at once, saves a new versioned CSV (`save_version`, same suffix-stripping helper pattern as `cleaning_router_v2.py`), returns `new_file_path` + `applied_transformations` list |
 
-**Versioning helper** (`save_version`): strips any of the suffixes `_dup_removed`, `_outliers_removed`, `_missing_imputed`, `_rows_filtered` from the base filename before appending the new one, so repeated operations don't chain into absurdly long filenames — always `<original_base>_<newsuffix>.csv`.
+**Helper functions** (module-level, not shared with `ml-core/cleaning.py` — same acceptable duplication pattern already present between `cleaning_router_v2.py` and `ml-core`):
+- `read_df(path)` — 404 if missing, else `pd.read_csv`.
+- `save_version(df, original_path, suffix)` — strips known suffixes (`_encoded`, `_scaled`, `_encoding_scaling`) before appending the new one, so repeated applies don't chain into long filenames.
+- `infer_type(series)` — **bool dtype → `"categorical"`** (fixed this session, see §11.3 — this is not cosmetic, it prevents a real crash), numeric dtype → `"numeric"`, else `"categorical"`.
+- `suggest_encoding(series)` — Level-2 rule-based: 2 unique values → label ("Binary column..."), >15 unique → label ("...avoids column explosion"), else → one-hot.
+- `suggest_scaler(series)` — Level-2 rule-based: <8 non-null values → `"none"`. Otherwise (fixed this session, wrapped in try/except as defense-in-depth): IQR-based outlier % >5% → `"robust"`; else Shapiro-Wilk (n≤5000) / D'Agostino (n>5000) normality test → `"standard"` if normal, else `"minmax"`. Falls back to `"minmax"`/"Default suggestion." on any exception.
 
-All 9 endpoints were tested live against a real messy CSV (duplicates, a genuinely skewed column, a normal-ish column with one extreme outlier, missing values in two columns) — every method, every error path (`400` for unknown method, `404` for missing file). One bug found and fixed (`profile_duplicates` NaN crash, see §11). One documented non-bug limitation: **linear interpolation cannot fill *leading* missing values** (no prior data point to interpolate from) — the endpoint honestly reports `after_missing` unchanged in that case rather than pretending success.
+**Every endpoint is now wrapped in `try/except HTTPException: raise / except Exception as e: raise HTTPException(500, ...)`** (added this session — see §11.3 for exactly why this matters, it's not just tidiness). This matches the pattern already used in `main.py` and `cleaning_router_v2.py`; `encoding_router.py` was the one file missing it when first transcribed from the pasted spec.
 
-### 9.3 Frontend structure (`Cleaning.jsx`)
-
-Three floating circular tab buttons (Duplicates / Outliers / Missing Values) positioned top-right above a white content card, with a small "notch" connector div linking the active tab to the card — matches a sketch the user provided. Design tokens live in a `C` object at the top (indigo primary `#6366f1`, amber/red for outlier severity, light theme throughout).
-
-**Duplicates tab** (`DuplicatesTab`): calls `profile-duplicates` on mount, shows stat badges (total/duplicate/clean rows), a vertically-scrollable full dataset table with duplicate rows amber-highlighted (left border + background tint), a "Remove All N Duplicates" button, then a download button after removal.
-
-**Outliers tab** (`OutliersTab`) — the most complex tab:
-- **Global view** (no column selected): two side-by-side chart cards — PCA scatter (Recharts `ScatterChart`, indigo=normal/red=outlier) and an Outlier Score Index plot (row index vs normalized IsolationForest score). A collapsible `ColumnPanel` lists every numeric column with its outlier count badge; clicking a column auto-collapses the panel and loads that column's detail.
-- **Column detail view**: shows the normality test result (is_normal + p-value + test name) as a badge, then two method buttons (Z-Score / IQR) — **whichever matches the column's own normality test is marked "★ Suggested"**, but the user can freely override it (this is the Level-2 rule-based-suggestion pattern from Global Rule 1). A **threshold slider** next to the method buttons (Z: 1.5–4.0 default 3.0, or IQR multiplier: 0.5–3.0 default 1.5) — **moving it recomputes outliers entirely client-side, no API call**, satisfying the Try-See-Decide Loop rule.
-- **Two chart types**, switchable via tab buttons at top-right of the chart area: **Histogram** (Recharts `BarChart` with amber solid lines for IQR bounds and pink dashed lines for Z-Score bounds shown *simultaneously* for comparison, plus a green shaded "normal zone" `ReferenceArea`) and **Strip Plot** (hand-built SVG, not Recharts — every value is an individual dot, jittered vertically via a deterministic sine-based function keyed on row index so positions are stable across re-renders; outlier dots are large and red/clickable, non-outliers are small and semi-transparent indigo; clicking a red dot toggles it to gray "kept" state).
-- **Outlier table** below the chart: Row#, Value, Score, Upper/Lower badge, a Remove/Keep toggle button per row — **fully synchronized bidirectionally with the chart** (click a dot → table row toggles; click a table checkbox-equivalent → dot color changes). A live count summary ("N detected · N to remove · N kept") and a "Reset selections" button.
-- **Removal**: the frontend computes the final list of row indices to remove (outliers whose dot/row is still red, i.e. not in the `keptRows` Set) and sends *exactly those indices* to `/cleaning/remove-outliers` — this is deliberately different from "remove all outliers in this column," preserving user judgment per-row.
-
-**Missing Values tab** (`MissingTab`): calls `profile-missing-global` on mount. A **row-completeness filter** control up top: a slider for "minimum present values per row," live-updating a count of how many rows would be dropped, with an "Apply Row Filter" button calling `apply-row-threshold`. Below that, a **swipeable gallery** (touch swipe + explicit buttons) alternating between a non-null-ratio bar chart (color-coded gray/amber/red by missing severity) and a hand-built SVG "missing matrix" (missingno-style: dark cell = present, light = missing, plus a right-side completeness sparkline bar per row, sampled to 250 rows for render performance). Below the gallery, a **per-column table**: column name, type badge (numerical/categorical), missing count, missing %, a method dropdown **context-filtered by column type** (KNN/mean/interpolation only offered for numerical columns; mode/drop always available), an "Apply" button per row, and a before→after missing-count readout once applied.
-
-**Every tab has a download button** after its action completes, hitting `/cleaning/download` with a meaningful filename (e.g. `dataset_duplicates_removed.csv`, `dataset_outliers_removed_<column>.csv`, `dataset_missing_imputed.csv`).
-
-### 9.4 Why individual-row-index removal, not bulk removal
-This is a deliberate design point carried over verbatim from the originating conversation and worth remembering: outlier removal never means "delete everything IQR/Z-Score flags" — it means "delete exactly the rows the user, after visual inspection, left marked red." The frontend always computes and sends explicit row indices; the backend's `remove-outliers` endpoint just does `df.drop(index=rows_to_remove, errors='ignore')`. This directly serves the philosophy's "preserve the user's analytical space" principle.
-
-### 9.5 Bugs found and fixed in the Cleaning page specifically
-1. **`profile_duplicates` NaN crash** (backend) — same pattern as everywhere else this session; fixed with `json.loads(df.to_json(...))`.
-2. **`ResizeObserver is not defined`** (test environment) — jsdom gap, not a real-browser bug; fixed by adding a polyfill to `setupTests.js` (permanent fix, benefits future chart pages too).
-3. **`border`/`borderTop` shorthand-mixing React warning** — two places in `Cleaning.jsx` (`StatBadge` component and the tab "notch connector" div) set the `border` shorthand *and* `borderTop` longhand in the same style object, which React warns can cause inconsistent styling across re-renders (the shorthand resets all border-* longhands when the CSSOM applies it). Fixed both by splitting into explicit `borderLeft`/`borderRight`/`borderBottom`/`borderTop`.
-
-### 9.6 Known-but-not-fixed minor issue
-`Cleaning.jsx` imports `{ mlAPI } from '../api'` at the top but **never actually uses it** — all real calls go through a local `callCleaning()` helper using raw `fetch()` hardcoded to `http://localhost:8001`. Harmless dead import, not worth a churn-only fix, but mention if asked why `mlAPI` appears unused.
-
-### 9.7 How the Cleaning page was verified (not just pasted)
-A real Vitest integration test (`Cleaning.integration.test.jsx`, written temporarily then deleted after passing — not committed to the repo) rendered the actual `CleaningPage` component with a real CSV path and let it make genuine `fetch()` calls to a live `uvicorn` instance running `cleaning_router.py` — no mocking. All three tabs were exercised: Duplicates (badges render with real counts), Outliers (global view loads, clicking the "age" column drills in and shows the real normality-test badge), Missing Values (badges render with real counts). This is what surfaced bugs #2 and #3 above. After the fixes, `npm run build` was also run with `Cleaning.jsx` reachable from the entry point (via the temporary `App.jsx` harness) — **703 modules transformed** successfully (up from ~31–44 when nothing imported it), confirming the whole import graph (including `recharts`) resolves and compiles cleanly in the real production build pipeline.
-
-### 9.8 Current live-viewing setup
-`frontend/src/App.jsx` (temporary harness, see §7) lets the user paste a CSV file path and view the real Cleaning page. A ready-made demo file exists at `backend-fastapi/sample_data/sample.csv` (256 rows, duplicates + outliers + missing values pre-baked in) — the user can paste its absolute path into the loader form. To run: FastAPI (`uvicorn main:app --port 8001 --reload`, no `--reload` was used during testing sessions but is fine for normal dev) and `npm run dev` in `frontend/`. **Django is not required** to view/use the Cleaning page — it talks to FastAPI directly.
-
-At the moment this handoff was written, both `backend-fastapi` (port 8001) and the Vite dev server (port 5173) were left **running** from the previous turn — check `netstat` in a new session before assuming ports are free; they may have been closed by the user since, or may still be occupied by stale processes.
+**`apply_all`'s one-hot handling** (fixed this session): `pd.get_dummies(series, prefix=col).astype(int)` — the `.astype(int)` is new. Without it, one-hot dummy columns save to CSV as `True`/`False` (pandas' `get_dummies` default dtype), which `pd.read_csv` re-infers as `bool` on the next read — this is the literal root cause of the crash described in §11.3. Casting to `int` here also fixes an earlier-noted, separate cosmetic inconsistency: the `/encode-column` preview endpoint already showed `1`/`0` (it explicitly does `int(dummies.iloc[i][dummy_col])`), but the *saved* file used to show `True`/`False` — now both agree.
 
 ---
 
-## 10. Documentation already written (all in `docs/`, all local HTML files, not published Artifacts)
+## 6. `ml-core/` — untouched this session and the one before it
 
-- `docs/ml_core_explained.html` — every function in `cleaning.py`/`models.py`/`evaluation.py`/`pipelines.py`, reused/adapted/new classification, purpose, I/O.
-- `docs/ml_core_pipeline_steps_reference.html` — the 10-step execution diagram from CSV upload through training hand-off, one card per step with receives/returns.
-- `docs/fastapi_backend_explained.html` — what FastAPI is, Django-vs-FastAPI responsibility table, the three core concepts (routes/Pydantic/HTTPException), request lifecycle, every endpoint in `main.py`, running instructions.
-- `docs/architecture_deep_dive.html` — the big one: full system diagram, Django↔FastAPI connection mechanics, frontend↔backend connection (`api.js`), database/migrations, JWT end-to-end, CORS (including documenting the fix), full CSV-upload-to-What-If-Simulator pipeline walkthrough, env vars, day-to-day running instructions, file map, beginner-pitfalls list.
-- `docs/architecture.md` — pre-existing, empty, from before this session (never touched).
-- **This file** (`docs/PROJECT_HANDOFF.md`) — new, written to hand off to a fresh chat.
-
-All were authored directly in clean UTF-8 except the first three, which were reconstructed from corrupted chat-pasted source material and verified to have zero suspicious characters remaining before saving.
+4 files (`cleaning.py`, `models.py`, `evaluation.py`, `pipelines.py`). See earlier handoff content (this doc's git history, or just read the files) if needed — nothing here has been touched across the last two sessions of work.
 
 ---
 
-## 11. The Recurring Bug Class — read this before writing any new backend endpoint
+## 7. Frontend (`frontend/`)
 
-**Every single new endpoint that returns raw pandas/numpy data must be checked for this.** Found and fixed independently **four times** this session:
+### `src/api.js`
+`djangoAPI`/`mlAPI` axios `baseURL`s now use `127.0.0.1` instead of `localhost` (§11.2). `versionsAPI`/`workflowAPI` (from the previous session) unchanged.
 
-1. Django's dataset-upload preview (`.to_dict()` on rows with NaN).
-2. `ml-core/cleaning.py`'s `detect_class_imbalance` (`numpy.bool_` from a numpy comparison).
-3. `cleaning_router.py`'s `profile_duplicates` (`.to_dict()` on rows with NaN) — the pasted code had *reintroduced* the same class of bug that had already been fixed once in Django, in a brand-new file.
+### `src/App.jsx` — dev harness, extended this session
+Still a temporary harness (no real `JourneyMap.jsx` routing exists). Stage chain is now: `'upload'` (renders `UploadPage`) → `'diagnose'` (renders `DiagnosePage` + a dev-only "Skip to Cleaning page test →" link) → `'encoding'` (**new**) → `'load-cleaning'` (the old CSV-path loader form, fallback) → default (renders `CleaningPage`).
 
-**The rule going forward**: any endpoint returning raw DataFrame row data must go through `json.loads(df.to_json(orient='records'))`, never `.to_dict(orient='records')` directly, whenever the columns involved might contain NaN. Any endpoint returning individual scalar values derived from numpy/pandas computations (comparisons, aggregates) must explicitly cast with `int()`/`float()`/`bool()` — numpy's own `int64`/`float64`/`bool_` types are not universally JSON-safe (`float64` happens to subclass Python's `float` so it's usually fine; `int64` and `bool_` are not subclasses of `int`/`bool` and reliably break `json.dumps`).
+New this session:
+```jsx
+import EncodingPage from './pages/Encoding'
+import useVersionHistory from './hooks/useVersionHistory'
+...
+const versionHistory = useVersionHistory(projectId, filePath)
+...
+if (stage === 'encoding') {
+  return (
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '32px 24px' }}>
+      <EncodingPage
+        projectData={{ filePath, projectId }}
+        onNext={(next) => { /* no-op — 'feature_selection' doesn't exist yet, deliberately not faked */ }}
+        onUpdateData={(update) => { if (update.cleanedFilePath) setFilePath(update.cleanedFilePath); }}
+        getDisplayPath={versionHistory.getDisplayPath}
+        registerVersion={versionHistory.registerVersion}
+        isStepDone={versionHistory.isStepDone}
+        getVersion={versionHistory.getVersion}
+        resetStep={versionHistory.resetStep}
+      />
+      <div>... "(dev harness) ← Back to Cleaning page test" link ...</div>
+    </div>
+  );
+}
+```
+And below the `CleaningPage` render (the default/fallback branch), a matching "(dev harness) Continue to Encoding page test →" button that does `setStage('encoding')`. **This button lives in `App.jsx`, deliberately NOT inside `Cleaning.jsx`** — `Cleaning.jsx` has an explicit, user-requested "no Proceed button, each tab's own action button IS the forward motion" design rule (documented in §9), so adding a navigation button there would violate that. The `'encoding'` stage check is placed in the if/else chain *before* the `load-cleaning || !filePath` fallback check, so it can never be shadowed.
+
+`App.test.jsx` remains known-stale/failing (asserts the old loader-form placeholder renders by default; `App.jsx` now starts at the Upload stage) — pre-existing, not touched, not this session's concern.
+
+### `src/hooks/useVersionHistory.js` — **NEW this session**
+
+The reason this exists: `Cleaning.jsx` implements `getDisplayPath`/`registerVersion`/`isStepDone`/`confirmBeforeAction` internally, self-contained (it predates this hook and is heavily tested — deliberately left untouched). But the pasted `Encoding.jsx` spec expects these as *props from a parent*. Rather than duplicate Cleaning.jsx's logic a second time inline in Encoding.jsx, this hook extracts the reusable parts so any *future* journey-map page can get the same behavior via props from `App.jsx` (or eventually a real `JourneyMap.jsx`).
+
+Full API surface:
+```js
+export const STEP_ORDER = { upload:1, diagnose:2, cleaning_duplicates:3, cleaning_outliers:4,
+  cleaning_missing:5, encoding:6, sampling:7, feature_selection:8, training:9, feature_impact:10, report:11 }
+  // mirrored a THIRD time now (Django's datasets/models.py, Cleaning.jsx's own top-level
+  // const, and here) — if you ever add/reorder a step, update all three.
+
+export default function useVersionHistory(projectId, initialFilePath) {
+  // returns: { versions, getDisplayPath, registerVersion, isStepDone, getVersion, resetStep }
+}
+```
+- **`versions`** — array of `{ id, stepName, label, filePath, rowCount, versionNumber }`, hydrated from Django's `versionsAPI.list(projectId)` on mount (optional — works local-only if Django is unreachable, same resilience principle used throughout this project). Seeded initially with a synthetic `{stepName:'upload', ...}` entry from `initialFilePath` so there's always something to fall back to before hydration completes.
+- **`getDisplayPath(stepName)`** — if this step already has its own version, return *that* version's file path (the output); else fall back to the nearest earlier version (by `STEP_ORDER`); else `initialFilePath`. Mirrors `Cleaning.jsx`'s bug-fixed `getDisplayPath` exactly (the original bug there: always returning the *input*, never the step's own *output* — see §9's bug history if touching this logic again).
+- **`isStepDone(stepName)`** — `versions.some(v => v.stepName === stepName)`.
+- **`registerVersion(stepName, filePath, label, rowCount, summary={})`** — keeps only versions strictly earlier than this step (local state), then appends the new one (no accumulation on redo/re-run). Remotely: unconditionally calls Django's `cascadeDelete` first (idempotent no-op if nothing downstream), then `register`, then patches the local entry's `id`/`versionNumber` from the real response.
+- **`getVersion(stepName)`** — **new this session**, returns the full version object (including `versionNumber`) for display purposes, e.g. Encoding's "Version created — Version 4" banner and the Versions-bar pill.
+- **`resetStep(stepName)`** — **new this session**, added specifically for Encoding's Redo requirement ("return the dataset to exactly the state it was before"). Filters local `versions` to drop this step (and anything at/after it), and — critically — calls Django's real `cascadeDelete` too, so the version genuinely stops existing server-side, not just client-side. This is what makes `getDisplayPath('encoding')` naturally fall back to the pre-encoding file again after Redo, which in turn makes `EncodingPage`'s own `useEffect([filePath])` re-fetch the correct data with zero special-case logic.
+
+### `src/pages/Cleaning.jsx` — **one line changed this session, nothing else**
+`const API = 'http://127.0.0.1:8001'` (was `'http://localhost:8001'`). Everything else in this file — the entire Cleaning page, its 3 tabs, its internal version-history logic, its Outliers-tab bug fixes — is exactly as described in §9 below and was NOT touched this session.
+
+### `src/pages/Diagnose.jsx` — read-only this session
+This session read the file in full (1524 lines) specifically to extract the `TopNav` component and the `DARK`/`LIGHT` theme token pattern for reuse in `Encoding.jsx`. **Nothing in `Diagnose.jsx` was written to.** (The file does show as modified in `git status`, but that diff pre-dates this session — see §3.) Its own structure, for reference if a future session needs it: `TopNav` (nav bar), `StatusBar` (health/missing/outliers/duplicates/target stat strip), a 40%/60% two-column layout (`DataPreviewCard`+`DiagnoseCard` left, `FeaturesCard`+`StatisticsCard`+`VisualizeSection` right), `PairplotOverlay` (full-screen seaborn-style pairplot), `ExpandableSection` (its own expand/collapse pattern, similar in spirit to but a separate implementation from `Cleaning.jsx`'s `ExpandableChart` and this session's new `Encoding.jsx`'s `ExpandableTable`). Defaults to **light** theme (`useState(false)`) despite a comment claiming dark-first — a pre-existing discrepancy, not touched.
+
+### `src/pages/Encoding.jsx` — **NEW this session, then substantially rewritten twice more in the same session**
+
+This is the file almost the entire session's work went into. ~1000 lines. Read this whole section before touching it again.
 
 ---
 
-## 12. Pending / Not Yet Done
+## 8. Dataset Version History + Step Memory — unchanged core, now used by two pages
 
-- **The real `App.jsx` / `JourneyMap.jsx` routing system** — exists in the user's other conversation, not yet pasted here. Current `App.jsx` is a throwaway harness (§7).
-- **Every other journey-map page**: Upload, Diagnose, Encoding & Scaling (the Cleaning page's "next" button already points at it by name), Goal Selection, Training, Results, What-If Simulator UI, Reports. None built yet on the frontend (the FastAPI *backend* endpoints for most of these already exist in `main.py` and are tested — it's the React pages that don't exist).
-- **Unifying `cleaning_router.py`'s helpers with `ml-core/cleaning.py`'s** — real duplication, not urgent, noted in §5.
-- **`lucide-react`** — mentioned in the originating chat's integration notes as needed; confirmed NOT actually needed (Cleaning.jsx doesn't use it). Don't install it unless a future page actually imports from it.
-- **Recharts v3 migration** — v2.x is installed and works; upstream considers v2 unmaintained. Not urgent.
-- **Nothing has been committed to git** (§3) — flag this to the user if they seem to assume otherwise.
+The system itself (Django `DatasetVersion`/`WorkflowState` models, `version_views.py`/`version_urls.py` endpoints, `STEP_ORDER`) is unchanged from the 2026-08-20 handoff. What's new this session is that a **second page** (`Encoding.jsx`) now participates in it, via the new `useVersionHistory` hook (§7) rather than via `Cleaning.jsx`'s internal-only implementation. Both talk to the same Django `DatasetVersion` table through the same `versionsAPI`; since only one journey-map page is ever mounted at a time in this app, there's no consistency risk from having two independent in-memory copies of the same server state.
 
-## 13. Quick-Reference: Running Everything
+---
+
+## 9. THE CLEANING PAGE — unchanged this session, summary only
+
+Full detail lives in this doc's git history (2026-08-20 version) if needed — nothing here changed. Quick summary for context: `frontend/src/pages/Cleaning.jsx`, self-contained (light-theme-only, no dark mode, hardcoded `C` design tokens), 3 tabs (Duplicates/Outliers/Missing Values) backed by `cleaning_router_v2.py`, manages its own version-history state internally (not via the new hook), has NO forward-navigation button by explicit user design (each tab's primary action button IS the forward motion), and had 4 Outliers-tab bugs (stale threshold, Remove-All stat drift, histogram downsampling, stale badges) diagnosed then fixed in an earlier session — **confirmed still fixed and working** via live curl verification at the start of this session (§11.1).
+
+---
+
+## 10. THE ENCODING & SCALING PAGE — complete detail (the core of this session's work)
+
+### 10.1 File and entry point
+`frontend/src/pages/Encoding.jsx`, default export `EncodingPage`, named export `computeColWidth` (exported specifically so it's unit-testable without a DOM — see §10.7). Called with:
+```jsx
+<EncodingPage
+  projectData={{ filePath, projectId }}
+  onNext={(next) => {...}}          // called with ('feature_selection', {}) on the (now-removed) continue button — see below, this call site no longer exists
+  onUpdateData={(update) => {...}}  // called with { cleanedFilePath } after Apply
+  getDisplayPath={fn} registerVersion={fn} isStepDone={fn} getVersion={fn} resetStep={fn}
+  // all five from useVersionHistory — see §7
+/>
+```
+
+### 10.2 Backend — see §5's `encoding_router.py` section for the full endpoint table and the bug history.
+
+### 10.3 Visual structure, top to bottom
+1. **`TopNav`** — reused verbatim from `Diagnose.jsx` (same `links` array `['Workspace','Upload','Diagnose','Cleaning','Training','Report']`, same active-underline styling logic, same theme-toggle button). **"Cleaning" is hardcoded as the active link** (`const active = l === 'Cleaning'`), not "Encoding" — there is no distinct "Encoding" entry in this simplified nav, and Cleaning is the closest/most recent stage. If a future session adds a real "Encoding" nav item, update this.
+2. **`VersionsBar`** — sticky pill row below the nav: `↻ Versions:` label, an always-present "Original Dataset" pill, and — **only when `done` is true** (i.e. `isStepDone('encoding')`, which only becomes true after a real Apply) — an active/highlighted "Encoding & Scaling · vN" pill, where N comes from `getVersion('encoding')?.versionNumber`. Before Apply, this second pill genuinely does not render (not just visually hidden) — verified live.
+3. **Info banner** — dismissible, "ℹ Start with encoding. Scaling unlocks once every categorical column is encoded."
+4. **Main content, 75/25 flex split**:
+   - **LEFT (`flex: '1 1 75%'`)**:
+     - Section header: `▤ Original Cleaned Dataset` (pre-Apply) or `▤ Complete New Dataset` (post-Apply), row/column counts, a `↺ Redo changes` button (always visible), a `⬇ Download` button (only once `done && newPath`).
+     - The dataset table itself, wrapped in `ExpandableTable` (§10.6) — pre-Apply this is `DatasetTable` (interactive, with encoding/scaling controls), post-Apply it's `AppliedDataTable` (read-only, the merged result).
+     - Pre-Apply only: the "Modified Columns" preview section (`⚡` icon, "only transformed columns appear here" subtitle, a "new version on Apply" badge), wrapped in its own `ExpandableTable`, containing `PreviewTable`. Below it, a summary bar (`✓ N encoded · ✓ N scaled` or "No modifications yet", plus a `🔒 encode all categorical columns to unlock scaling` warning when relevant) and the `Apply changes & create version ⟶` button.
+     - Post-Apply only: a success banner (`✓ Version created — Version N`, "This dataset is now the working version. Use ↺ Redo changes above if you want to start over.").
+   - **RIGHT (`flex: '0 0 25%'`)**: `GuidanceSection` — algorithm picker → rule-based scaler suggestion (`ALGORITHM_MAP`), plus static explanations of Min-Max/Standard/Robust scaling (`SCALER_INFO`). Unchanged content from the original pasted spec, just restyled to fit the narrower column and dark/light theme.
+5. **Redo confirmation modal** — scrim+blur, "This clears every encoding/scaling choice... including removing the Encoding & Scaling version if one was already applied." Cancel / "Yes, redo".
+
+### 10.4 Column-control alignment (requirement from the first UI-rewrite round)
+`DatasetTable` renders three pieces sharing **the exact same per-column width** (`colWidth`, computed responsively — see §10.7): an encoding-controls row (a `<select>` directly above each *categorical* column, empty placeholder div for others), the `<table>` itself, and a scaling-controls row (a `<select>` directly below each *numeric* column). All three are inside one `overflowX:'auto'` wrapper so they scroll together. **The table has `tableLayout:'fixed'`** — this is the actual mechanism that keeps the controls aligned; without it, a long cell value can silently widen a column past its declared width and desync the table from the control rows above/below it (this was a real, fixed bug from the first rewrite round, not a hypothetical).
+
+### 10.5 Scaling lock
+`categoricalCols = profile.columns.filter(c => c.inferred_type === 'categorical')`; `encodingComplete = categoricalCols.length === 0 || categoricalCols.every(c => !!encChoices[c.name])`. Every `ScalingDropdown` receives `locked={!encodingComplete}` — when locked, it's genuinely `disabled`, shows `🔒 locked` as its placeholder option instead of `— scale`, dimmed styling, `title="Finish encoding every categorical column first"`. Purely local UI state (`encChoices`), no backend involvement. Verified live: locked before encoding the only categorical column in `sample.csv` (`Gender`), unlocked immediately after.
+
+### 10.6 One-hot visual grouping + `ExpandableTable`
+**One-hot grouping** (in `PreviewTable`, the pre-Apply "Modified Columns" view only — post-Apply, one-hot columns are just normal columns in the merged result, no grouping needed): a 2-row `<thead>`. Row 1 has one `<th colSpan={n}>` per transformed *original* column, reading e.g. `Gender (one-hot)` (or `(label)`, `(standard)`, etc. for non-one-hot transforms), with a bold `2px` border (`${C.primary}99`) on its right edge to visually separate groups. Row 2 has the actual sub-column names (prefix stripped, e.g. `Female`/`Male`/`__MISSING__` not `Gender_Female`/...). The group's sub-columns are narrowed so the *group's total width* stays close to one normal column's computed width: `subW = Math.max(MIN_SUBCOL_W, Math.floor(colWidth / subCols.length))`, `MIN_SUBCOL_W = 40`.
+
+**`ExpandableTable`** (new shared component, mirrors `Cleaning.jsx`'s `ExpandableChart` / `Diagnose.jsx`'s `ExpandableSection` pattern exactly — a `⤢` button top-right of the inline content; clicking it renders the **same `children` a second time** inside a fullscreen scrim+blur modal (`width:'92vw', maxWidth:1500, maxHeight:'88vh'`) with a `✕ Close` button (also closes on click-outside via the scrim's own `onClick`, stopped from bubbling by the inner card). Rendering `children` twice — not portaling — is deliberate and matches the established codebase pattern: each mount gets independent state/hooks, which is exactly what lets the modal's copy of `DatasetTable`/`PreviewTable` compute a *wider* `colWidth` automatically (since it measures its own, much wider, modal container) with zero coordination code needed. **Accessibility note**: the expand button's *accessible name* is its emoji text content (`⤢`), not its `title` attribute (title only becomes the accessible name when there's no other text) — it also has an explicit `aria-label="Expand table"` (added this session after a test caught the gap) so screen readers announce something meaningful instead of a bare glyph.
+
+Both the main dataset table and the "Modified Columns" preview table are wrapped in `ExpandableTable`. Verified live: expand opens the modal with duplicated content, Close collapses it back.
+
+### 10.7 Responsive column width (third bug-fix round)
+Replaced a single fixed `COL_W = 92` constant with:
+```js
+function useContainerWidth(fallback = 900) {
+  const ref = useRef(null)
+  const [width, setWidth] = useState(fallback)
+  useLayoutEffect(() => {
+    const el = ref.current; if (!el) return
+    const measure = () => setWidth(el.clientWidth)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return [ref, width]
+}
+
+export function computeColWidth(availWidth, numCols) {
+  if (numCols <= 0) return MAX_COL_W
+  const fit = Math.floor((availWidth - ROW_N_W - 4) / numCols)
+  return Math.max(MIN_COL_W, Math.min(MAX_COL_W, fit))  // MIN_COL_W=76, MAX_COL_W=240
+}
+```
+`DatasetTable`, `AppliedDataTable`, and `PreviewTable` (grouped by original-column count, not sub-column count) each call `useContainerWidth()` themselves and compute their own `colWidth`/`totalWidth = ROW_N_W + numCols*colWidth`, applied as an explicit pixel `width` on the `<table>` (not a `%`) so the table's rendered width always exactly matches the sum of its declared column widths — few columns in a wide container get wide columns (up to `MAX_COL_W`) filling the available space; many columns clamp to `MIN_COL_W` and the table overflows its container, triggering the existing `overflow-x:auto` wrapper's horizontal scroll. Border/styling untouched (`borderCellStyle` helper unchanged).
+
+**Known testing limitation, told to the user explicitly**: jsdom (Vitest's DOM environment) has no real layout engine — `clientWidth` is always `0` there, so the *visual* "does a 5-column dataset really get wider columns" behavior cannot be meaningfully asserted via the test suite. What *was* verified live: `computeColWidth` as a pure function (exported specifically for this) — `computeColWidth(900, 5)` returns something well above the old fixed 92px and below `MAX_COL_W`; `computeColWidth(900, 40)` clamps to exactly `MIN_COL_W=76`. The actual pixel-perfect visual result needs a real browser.
+
+### 10.8 Apply → complete dataset → version → Redo lifecycle
+```js
+const handleApply = async () => {
+  const res = await callEncoding('apply', { file_path: filePath, encoding_decisions, scaling_decisions })
+  setNewPath(res.new_file_path)
+  const merged = await callEncoding('profile', { file_path: res.new_file_path })  // <-- re-profile the APPLIED file
+  setAppliedProfile(merged)
+  if (registerVersion) await registerVersion('encoding', res.new_file_path, 'Encoding & Scaling', res.row_count)
+  if (onUpdateData) onUpdateData({ cleanedFilePath: res.new_file_path })
+  setApplied(true)
+}
+```
+The "Complete New Dataset" table is **not assembled client-side** from the pending preview + original columns — it's a fresh `/encoding/profile` call against the file that Apply just wrote, so it's guaranteed to match exactly what's on disk (this was a deliberate design choice, not an oversight — assembling it client-side would risk drifting from reality, e.g. if a scaler produces slightly different values than the live preview did due to fit-on-full-column vs fit-on-preview-subset differences). **A real dataset version is created only once, at this point** — never on individual encode/scale preview clicks (those only call `/encode-column`/`/scale-column`, which don't touch versioning at all).
+
+```js
+const handleRedo = async () => {
+  if (resetStep) await resetStep('encoding')   // real Django cascade-delete, not a client-side fake
+  setEncChoices({}); setEncResults({}); setScaleChoices({}); setScaleResults({})
+  setApplied(false); setNewPath(null); setAppliedProfile(null)
+}
+```
+Because `resetStep` really deletes the Django `DatasetVersion` row, `getDisplayPath('encoding')` naturally falls back to the pre-encoding version again on the hook's next render, which changes the `filePath` this component computes via `useMemo`, which re-triggers the `useEffect([filePath])` that fetches `/encoding/profile` — so the page genuinely shows the pre-encoding dataset again with **zero special-case "restore" logic**. This was a deliberate design win worth preserving if this page is touched again: don't add manual state restoration for Redo, lean on the version system's own fallback chain.
+
+### 10.9 Theme
+Own copy of `DARK`/`LIGHT` tokens, **identical values** to `Diagnose.jsx`'s (teal/cyan `#2dd4bf` primary in dark, `#0d9488` in light) — reused, not reinvented, per explicit request to feel like part of the same app. **Defaults to dark** (`useState(true)`) — this is a deliberate one-off choice matching the user's dark-themed reference screenshot, and *differs* from `Diagnose.jsx`'s own default (light, `useState(false)`). Toggle button (`🌙 Dark` / `☀ Light`) reused from `TopNav`.
+
+### 10.10 Removed
+The "Continue to Feature Selection →" button and its `onNext('feature_selection', {})` call site no longer exist anywhere in this file — removed per explicit request (Feature Selection isn't built and won't be reachable from here).
+
+### 10.11 Known gaps, not fixed, low priority right now
+- `EncodingPage`'s own Redo modal clears local state and calls `resetStep`, but doesn't cascade-invalidate *downstream* steps (Sampling/Feature Selection) the way `Cleaning.jsx`'s `confirmBeforeAction` does for steps after Cleaning. Low-impact today since neither of those pages exists yet; worth revisiting once they do.
+- `GuidanceSection`'s algorithm→scaler suggestion is illustrative only — it doesn't read the project's actual selected algorithm from anywhere (there's nowhere to select one yet).
+
+### 10.12 How to view it live
+Same three servers as always (see §15). Reach it via `http://localhost:5173` → Upload → Diagnose → "(dev harness) Skip to Cleaning page test →" → paste a real on-disk CSV path (e.g. `backend-fastapi/sample_data/sample.csv`'s absolute path) → Cleaning page loads → "(dev harness) Continue to Encoding page test →" at the bottom. `sample.csv` (256 rows, gitignored) has one categorical column (`Gender`, with some missing values) and four numeric columns (`Age`, `Glucose`, `BMI`, `Outcome`) — good for testing the encoding-lock behavior (only one column to encode) but not for testing many-categorical-column scenarios or the "small dataset gets wide columns" responsive behavior at a large column count. For testing small-dataset responsiveness, a throwaway 10-row/5-column CSV was used during this session (not saved anywhere persistent).
+
+---
+
+## 11. Bugs found and fixed this session — full detail
+
+### 11.1 Outliers-tab bugs — verified already fixed, no new work needed
+At the very start of this session, the user shared a claude.ai-authored analysis of 4 Cleaning-page Outliers-tab bugs (stale threshold carryover between columns, "Remove All" using sampled/stale data, histogram downsampling distortion, stale column badges after removal) along with a prescriptive implementation prompt. Investigation found **all 4 already fixed** in the current `cleaning_router_v2.py`/`Cleaning.jsx` (from an earlier session not covered by this doc's history). Verified live via curl against `sample.csv`: `profile-outliers-global` and the new `get-all-outlier-indices` endpoint's `per_column_counts` matched exactly; the union of outlier indices (15) was correctly *less than* the naive sum (16), proving real deduplication of a row flagged by two different columns; a full remove-all round trip correctly dropped exactly 15 rows; re-profiling the result showed new outliers emerging in `Glucose` — explained to the user as expected, sound statistical behavior (IQR bounds recompute against whatever data currently exists after removing extremes), not a bug resurfacing. No code was changed for this item — purely verification and reporting.
+
+### 11.2 Dual-stack `localhost` → "Failed to fetch" (first occurrence)
+User reported the Encoding page showed only `⚠ Failed to fetch` and nothing else. Diagnosis: this machine's `localhost` resolves to both `::1` and `127.0.0.1`; FastAPI/Django bind IPv4 only; confirmed directly via `curl -6 http://[::1]:8001/health` (connection refused) vs `curl -4 http://127.0.0.1:8001/health` (200 OK). **Dead end explored and abandoned**: `uvicorn --host ::` looked like the fix but is actually IPv6-*only* on this Windows/Python stack, not true dual-stack (confirmed live: switching to it broke IPv4 access entirely). **Real fix**: replaced every `http://localhost:PORT` in this codebase's frontend-facing/server-to-server URLs with the `127.0.0.1` literal — `frontend/src/api.js` (both baseURLs), `frontend/src/pages/Cleaning.jsx` (the `API` const), `frontend/src/pages/Encoding.jsx` (the `ML_API` const, written this way from the start once this bug was known), `backend-django/datasets/views.py` (the FastAPI profiling call). Added `127.0.0.1` origins alongside (not replacing) the existing `localhost` ones in both backends' CORS allow-lists. Saved as a standing rule in memory (`dual_stack_localhost_bug.md`, also mirrored in the "how to apply going forward" language embedded in this doc's §2 and §0's mojibake-adjacent tips): **any new file that adds a `localhost:PORT` URL to reach Django/FastAPI must use `127.0.0.1` instead, or add both.**
+
+### 11.3 FastAPI unhandled-exception → CORS-header-less 500 → "Failed to fetch" (second, different occurrence)
+User reported: clicking "Apply Scaling" opened what looked like a new blank page showing only `⚠ Failed to fetch`. This looked identical to §11.2 but was a **different root cause** (the §11.2 fix was already fully applied by this point) — the user explicitly asked to investigate properly rather than hide the error, which mattered, because the actual mechanism is genuinely two layered bugs:
+
+1. **The real crash**: `handleApply` re-profiles the just-applied file to build the "Complete New Dataset" view (§10.8). That file's one-hot columns are `bool` dtype (pandas `get_dummies` default) → saved to CSV as literal `True`/`False` → `pd.read_csv` re-infers them as `bool` on the next read → `pd.api.types.is_numeric_dtype(bool_series)` is `True` → `infer_type()` (pre-fix) classified them as `"numeric"` → `suggest_scaler()` called `series.quantile()` on them → numpy's quantile interpolation does `b - a` on the two bracketing values, and subtraction isn't defined for numpy bool arrays → `TypeError: numpy boolean subtract, the - operator, is not supported...`. Found this by reading the actual FastAPI server's own log file, not by guessing.
+2. **Why it became "Failed to fetch" instead of a normal error**: that exception was unhandled, so it propagated to Starlette's outermost `ServerErrorMiddleware` — which sits **outside** `CORSMiddleware` in the wrapping order. Its fallback response (`Internal Server Error`, plain text) never gets CORS headers attached, confirmed by direct comparison of response headers between a working call and the crash (working: `access-control-allow-origin` etc. present; crashing: absent, zero CORS headers). The browser then rejects that response as a CORS failure — not a clean HTTP error — and `fetch()` throws the generic `TypeError: Failed to fetch`, which is indistinguishable from the server being genuinely unreachable. This is a real, reproducible Starlette architectural behavior, not a misconfiguration; reordering `add_middleware` calls doesn't fix it. The only real fix is to never let an exception escape the route handler unhandled in the first place.
+
+**Fix, both layers**: `infer_type()` now treats `bool` dtype as `"categorical"` (defensive — covers a genuine boolean column in a raw upload too, not just the one-hot chain). `apply_all()` now casts one-hot dummies to `.astype(int)` before saving (fixes the root cause at the source, plus a separate cosmetic True/False-vs-0/1 inconsistency noted earlier). `suggest_scaler()`'s quantile/IQR block wrapped in try/except as defense-in-depth. **Every endpoint in `encoding_router.py` wrapped in try/except → `HTTPException(500, ...)`**, matching the convention already used everywhere else in this codebase (`main.py`, `cleaning_router_v2.py`) — `encoding_router.py` was the one file missing it. Verified live: reproduced the exact original crash scenario (one-hot encode Gender + standard-scale BMI + Apply, then re-profile the result) — now returns 200 with proper CORS headers instead of 500 with none; the saved CSV now has `0`/`1` not `True`/`False`; separately tested a raw dataset with a genuine boolean column (`is_smoker: [True, False, ...]`) to confirm the defensive `infer_type` fix works generally, not just for the one-hot-output path. Also hit and resolved a process-management mess during this investigation — multiple orphaned/duplicate `uvicorn` instances lingering from earlier restarts across the session, one of them silently serving stale pre-fix code despite `netstat` showing only one clear listener; resolved with a full clean kill-and-restart sweep. **If this class of symptom recurs** (any action that "navigates away" to a blank page with just "Failed to fetch"), check the FastAPI server's own log/traceback first — the frontend is rendering faithfully; the real story is server-side. Saved to memory as `fastapi_cors_crash_bug.md`.
+
+### 11.4 Two new RTL/Vitest testing pitfalls found while verifying the UI rewrite
+Both now in memory (`testing_conventions.md`), both worth knowing before writing the next temporary test in this project:
+- **RTL's default text matcher only reads an element's *direct* text-node children, not text inside nested elements** — unlike native `.textContent`, which recurses. A pattern like `<th>{label} <span>({annotation})</span></th>` (common in this codebase for a dimmed inline annotation) means no single queryable node's own text is ever `"label (annotation)"` combined — `getByText`/`queryAllByText` can never find it, no matter how long a `waitFor` runs. This looked *exactly* like a timing/slowness bug across several debugging rounds (bumping timeouts from 10s→15s→20s did nothing) before the real cause was found by comparing `document.body.innerHTML.includes(...)` (a raw string search, unaffected) against the RTL query result. Fix in the test, never the component: query native DOM directly — `Array.from(document.querySelectorAll('th')).some(el => re.test(el.textContent))`.
+- **Mocks representing the same underlying real system must stay consistent with each other.** `registerVersion` and `getVersion` both come from one real `useVersionHistory` hook instance in production — one writes, the other reads the same state. A test with a static `getVersion={() => null}` alongside a `registerVersion` mock that "succeeds" makes correct component code (which reads `getVersion()` right after calling `registerVersion()`, exactly as the real hook supports) look broken. Fix: a small stateful stub — a shared `let currentVersion` that both mock functions read/write — mirroring the real hook, not a change to the component.
+
+---
+
+## 12. Documentation already written (`docs/`, local HTML files, not published Artifacts)
+`ml_core_explained.html`, `ml_core_pipeline_steps_reference.html`, `fastapi_backend_explained.html`, `architecture_deep_dive.html` — all pre-existing, not touched this session or the one before it, still accurate for the parts that haven't changed (ml-core, `main.py`'s original endpoints, JWT/CORS mechanics though not the `127.0.0.1` specifics from this session). `architecture.md` — pre-existing, empty. **This file** — rewritten this session.
+
+---
+
+## 13. Recurring bug classes — read before writing any new backend endpoint or new cross-service URL
+
+1. **NaN/numpy-type JSON serialization** (oldest, most-recurring class, 4+ occurrences across prior sessions): any endpoint returning raw pandas/numpy data must go through `json.loads(df.to_json(orient='records'))`, never `.to_dict(orient='records')` directly, whenever NaN might be present; scalar values from numpy comparisons/aggregates need explicit `int()`/`float()`/`bool()` casts. `encoding_router.py`'s `/profile` endpoint uses a *different*, also-safe pattern worth knowing about: `.fillna("").to_dict(orient="records")` — clearing NaN *before* calling `.to_dict()` sidesteps the crash too (verified this actually works cleanly, empirically, not just in theory).
+2. **Dual-stack `localhost`** (this session, §11.2): any new `http://localhost:PORT` URL added to reach Django/FastAPI is a live landmine on this machine. Use `127.0.0.1`.
+3. **FastAPI unhandled exceptions → CORS-header-less crash → "Failed to fetch"** (this session, §11.3): any new FastAPI router file must wrap every route handler body in try/except → `HTTPException`, no exceptions, or a real bug becomes an undebuggable dead end for whoever's using the frontend.
+
+---
+
+## 14. Pending / Not Yet Done
+
+- **`JourneyMap.jsx` / real multi-page routing** — still doesn't exist. `App.jsx`'s Upload→Diagnose→Encoding→(loader)→Cleaning chain is still dev-harness-style. `WorkflowState.needs_redo_steps`'s ↺ visual indicator still has a data model and API but no page to render itself on.
+- **Confirm the `Diagnose.jsx` uncommitted diff** (§3) — pre-existing, not authored by this session, still unreconciled.
+- **Unify `cleaning_router_v2.py`'s/`encoding_router.py`'s helper duplication with `ml-core/cleaning.py`'s equivalents** (`check_normality`, `infer_type`-ish logic, etc.) — real duplication, accepted pattern in this codebase, not urgent.
+- **`EncodingPage`'s Redo doesn't cascade-invalidate downstream steps** (§10.11) — low priority until Sampling/Feature Selection pages exist.
+- **Every other journey-map page**: Sampling, Feature Selection, Training, Results, What-If Simulator UI, Reports. FastAPI backend endpoints for most of the ML-pipeline ones already exist in `main.py` (tested in an earlier session) — it's the React pages that don't exist.
+- **Recharts v3 migration** — v2.x installed and works, upstream considers v2 unmaintained. Not urgent. (Note: `Encoding.jsx` doesn't use Recharts at all — its charts, if any are added later, would be a fresh decision.)
+- **Nothing has been committed to git this session** — flag to the user if they seem to assume otherwise; see §3 for the exact current diff.
+
+## 15. Quick-Reference: Running Everything
 
 ```
 Terminal 1 (Django):   cd backend-django   && .venv\Scripts\Activate && python manage.py runserver 8080
 Terminal 2 (FastAPI):  cd backend-fastapi  && .venv\Scripts\Activate && uvicorn main:app --port 8001 --reload
 Terminal 3 (React):    cd frontend         && npm run dev
 ```
-Django admin: `http://localhost:8080/admin`. FastAPI interactive docs: `http://localhost:8001/docs`. React: `http://localhost:5173` (or next free port).
+Django admin: `http://localhost:8080/admin`. FastAPI interactive docs: `http://localhost:8001/docs`. React: `http://localhost:5173`.
+
+**Do NOT add `--host ::` to the FastAPI command** — it looks like a dual-stack fix but is IPv6-only on this machine's Windows/Python stack (§11.2). Plain `--port 8001` (IPv4-only, `127.0.0.1`) is correct and is what every frontend URL in this codebase now targets explicitly.
+
+**If you restart FastAPI mid-session, check for orphaned processes first** — this session repeatedly hit confusion from duplicate/leftover `uvicorn` instances after restarts (one silently serving stale code while `netstat` seemed to show a clean single listener). Before assuming a code change isn't taking effect, run `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'"` and check for more than one `uvicorn main:app` command line; kill all of them and start exactly one fresh instance if in doubt.
+
+Dev auth for local testing (created by `App.jsx`'s `bootstrapDevProject()`): `cleaning_dev@example.com` / `dev-preview-pass-1234`, project name `"Cleaning Page Preview"` — auto-created/reused on every load.
+
+**Testing convention — follow it**: write a temporary `*.test.jsx` file (Vitest + Testing Library) that renders real components against the **actually-running** FastAPI/Django dev servers (no mocking of fetch itself — only mock the version-history props when a component expects them), confirm it passes, then **delete the test file** — never committed. See §11.4 for the two newest pitfalls, and the standing list from earlier sessions: `el.closest('div')` self-matches when called on a `<div>` that already matches (use `.parentElement`); `getByText`/`queryAllByText` matches ancestors whose *concatenated* text contains the substring, not just the intended leaf (use `getByRole` with `{name}` for interactive elements, or a `{selector: 'span'}` restriction, or `getAllByText`+length-check for status text); RTL's text matcher does NOT reach into nested elements the way `.textContent` does (§11.4 — the opposite-direction version of the same general "text matching is not what you'd naively expect" theme); default `findByText`/`waitFor` timeouts (1000ms/1000ms) are shorter than some real endpoint calls in this codebase — pass explicit longer timeouts; state that updates optimistically can render before an async re-fetch from the same action resolves — wrap follow-up assertions in `waitFor`; background Vitest runs in this environment can take 15-60+ seconds for multi-network-call test files — use `run_in_background: true` on the Bash tool rather than a short foreground timeout.

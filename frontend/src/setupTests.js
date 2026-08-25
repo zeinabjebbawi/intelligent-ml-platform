@@ -14,3 +14,15 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     disconnect() {}
   };
 }
+
+// jsdom also doesn't implement IntersectionObserver — DataReadiness.jsx's
+// sticky section-navigator highlight uses it to track which section is
+// scrolled into view. Without this stub, mounting that page in a test
+// throws "IntersectionObserver is not defined" before any assertion runs.
+if (typeof globalThis.IntersectionObserver === 'undefined') {
+  globalThis.IntersectionObserver = class IntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}

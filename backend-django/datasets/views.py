@@ -107,7 +107,10 @@ class DatasetUploadView(APIView):
         profiling_succeeded = False
         try:
             fastapi_response = http_requests.post(
-                'http://localhost:8001/ml/profile',
+                # 127.0.0.1, not "localhost" — on a dual-stack machine
+                # "localhost" can resolve to ::1 as well as 127.0.0.1, and
+                # FastAPI only binds IPv4. Using the literal sidesteps that.
+                'http://127.0.0.1:8001/ml/profile',
                 json={
                     'file_path': file_path,   # the path we just saved to disk
                     'target_column': None     # user has not chosen target yet

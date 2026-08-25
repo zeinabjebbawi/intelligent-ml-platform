@@ -83,6 +83,12 @@ from pipelines import (
     scale_features,
 )
 from cleaning_router_v2 import router as cleaning_router
+from encoding_router import router as encoding_router
+from feature_engineering_router import router as feature_router
+from sampling_router import router as sampling_router
+from visualization_router import router as viz_router
+from feature_selection_router import router as feature_selection_router
+from diagnose_router import router as diagnose_router
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FASTAPI APP SETUP
@@ -96,14 +102,34 @@ app = FastAPI(
 )
 
 app.include_router(cleaning_router)
+app.include_router(encoding_router)
+app.include_router(feature_router)
+app.include_router(sampling_router)
+app.include_router(viz_router)
+app.include_router(feature_selection_router)
+app.include_router(diagnose_router)
 
 # CORS: allow React (port 5173) and Django (port 8080) to call this API
+#
+# Both "localhost" and "127.0.0.1" variants are listed because on a
+# dual-stack machine "localhost" can resolve to ::1 (IPv6) as well as
+# 127.0.0.1 (IPv4). This server only binds IPv4 (127.0.0.1), so if a
+# browser's fetch() happens to resolve "localhost" to ::1 first, the
+# connection fails outright before CORS is even reached (surfaces in the
+# browser as a bare "Failed to fetch", not an HTTP error) — see
+# frontend/src/api.js and the API constants in Cleaning.jsx/Encoding.jsx,
+# which now hit 127.0.0.1 directly instead of "localhost" to sidestep this
+# ambiguity entirely. Both origins are still allowed here in case anything
+# is loaded via the "localhost" URL instead.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",   # React frontend (Vite)
+        "http://127.0.0.1:5173",
         "http://localhost:3000",   # React if running on port 3000
+        "http://127.0.0.1:3000",
         "http://localhost:8080",   # Django backend (for internal calls)
+        "http://127.0.0.1:8080",
     ],
     allow_credentials=True,
     allow_methods=["*"],           # allow GET, POST, PUT, DELETE, etc.

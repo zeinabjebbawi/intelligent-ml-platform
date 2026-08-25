@@ -1,28 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DESIGN TOKENS — light (default) mirrors Cleaning.jsx's palette for platform
-// consistency; dark is an equivalent built for the toggle. Nothing else in the
-// app is dark-mode aware yet, so this page owns its own theme entirely.
-// ─────────────────────────────────────────────────────────────────────────────
-const LIGHT = {
-  bg: '#f8fafc', card: '#ffffff', border: '#e2e8f0',
-  primary: '#6366f1', primarySoft: 'rgba(99,102,241,0.08)',
-  success: '#10b981', successSoft: 'rgba(16,185,129,0.1)',
-  warning: '#f59e0b', warningSoft: 'rgba(245,158,11,0.1)',
-  danger: '#ef4444', dangerSoft: 'rgba(239,68,68,0.08)',
-  text: '#1e293b', muted: '#64748b', light: '#f1f5f9',
-  chip: '#f1f5f9', chipText: '#475569', inputBg: '#ffffff',
-}
-const DARK = {
-  bg: '#0a0e17', card: '#131826', border: '#232a3a',
-  primary: '#818cf8', primarySoft: 'rgba(129,140,248,0.16)',
-  success: '#34d399', successSoft: 'rgba(52,211,153,0.14)',
-  warning: '#fbbf24', warningSoft: 'rgba(251,191,36,0.14)',
-  danger: '#f87171', dangerSoft: 'rgba(248,113,113,0.14)',
-  text: '#e6eaf2', muted: '#8b96ab', light: '#1a2030',
-  chip: '#1a2030', chipText: '#a0aabd', inputBg: '#0f1420',
-}
+import { useTheme } from '../theme'
+import TopNav from '../components/TopNav'
 
 const shadow = '0 4px 24px rgba(0,0,0,0.10)'
 const shadow2 = '0 1px 4px rgba(0,0,0,0.08)'
@@ -525,20 +503,6 @@ const REFERENCE_DATASETS = [
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED SMALL COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
-function ThemeToggle({ dark, onToggle }) {
-  return (
-    <button onClick={onToggle} title="Switch theme"
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-        borderRadius: 20, border: `1px solid ${dark ? DARK.border : LIGHT.border}`,
-        background: dark ? DARK.card : LIGHT.card, color: dark ? DARK.text : LIGHT.text,
-        fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: shadow2,
-      }}>
-      <span>{dark ? '🌙' : '☀'}</span>{dark ? 'Dark' : 'Light'}
-    </button>
-  )
-}
-
 function Pill({ label, tone = 'neutral', C, small }) {
   const tones = {
     neutral: { bg: C.chip, color: C.chipText },
@@ -770,15 +734,29 @@ function PreviewTable({ columns, rows, suggestedTarget, C }) {
         maxHeight: 420, overflow: 'auto', border: `1px solid ${C.border}`, borderRadius: 12,
       }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-          <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+          <thead>
             <tr>
               {columns.map(col => {
                 const isTarget = col === suggestedTarget
                 return (
+                  // Sticky positioning now lives on each <th> directly
+                  // (matching the pattern already proven elsewhere in this
+                  // app — Encoding.jsx/Sampling.jsx/FeatureSelection.jsx all
+                  // do this per-cell rather than on <thead> as a whole,
+                  // which is less consistently supported). The real bug
+                  // this closes: the target column's header used
+                  // C.primarySoft — a translucent rgba(...,0.10) tint, not
+                  // an opaque color — as its background. Every OTHER
+                  // column's opaque C.light header was already fine; only
+                  // the (visually most important) target column let
+                  // scrolling row data show through its own sticky header.
+                  // Opaque C.light for every header now; the target column
+                  // still reads as distinct via its primary text color and
+                  // "(Target)" label, same as the data rows below already do.
                   <th key={col} style={{
                     ...thStyle,
                     color: isTarget ? C.primary : C.muted,
-                    background: isTarget ? C.primarySoft : C.light,
+                    position: 'sticky', top: 0, zIndex: 1,
                   }}>
                     {col}{isTarget && ' (Target)'}
                   </th>
@@ -1120,11 +1098,14 @@ function DatasetSetupDrawer({
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN UPLOAD PAGE
 // ─────────────────────────────────────────────────────────────────────────────
-export default function UploadPage({ projectData, onNext, onUpdateData }) {
-  const [dark, setDark] = useState(false)
-  const C = dark ? DARK : LIGHT
+export default function UploadPage({ projectData, onNext, onUpdateData, active, onNavigate, furthestOrder }) {
+  const { dark, C } = useTheme()
 
   const [dataset, setDataset] = useState(null)   // unified shape, see buildDataset()
+  // The actual File/Blob backing `dataset`, kept only so handleConfirm can
+  // hand it to App.jsx for a real Django upload — never read for parsing
+  // (parsing already happened client-side into `dataset`).
+  const [rawFile, setRawFile] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -1159,6 +1140,7 @@ export default function UploadPage({ projectData, onNext, onUpdateData }) {
       const { columns, rows } = parseCSV(text)
       if (!columns.length || !rows.length) throw new Error('Could not read any rows from this file.')
       setDataset(buildDataset('upload', file.name, file.size, columns, rows))
+      setRawFile(file)
     } catch (e) {
       setError(e.message || 'Failed to read this CSV file.')
     } finally {
@@ -1172,8 +1154,10 @@ export default function UploadPage({ projectData, onNext, onUpdateData }) {
     setTimeout(() => {
       try {
         const { columns, rows } = ds.generate()
-        const csvBytes = new Blob([columns.join(',') + '\n' + rows.map(r => columns.map(c => r[c]).join(',')).join('\n')]).size
+        const csvText = columns.join(',') + '\n' + rows.map(r => columns.map(c => r[c]).join(',')).join('\n')
+        const csvBytes = new Blob([csvText]).size
         setDataset(buildDataset('reference', ds.filename, csvBytes, columns, rows))
+        setRawFile(new File([csvText], ds.filename, { type: 'text/csv' }))
       } catch (e) {
         setError('Failed to load reference dataset.')
       } finally {
@@ -1200,30 +1184,22 @@ export default function UploadPage({ projectData, onNext, onUpdateData }) {
       // confirmed here instead of asking the user to load the same CSV twice.
       columns: dataset?.columns,
       rows: dataset?.rows,
+      // Real file/blob so App.jsx can persist it through Django's upload
+      // endpoint, giving the whole downstream pipeline (Cleaning/Encoding/
+      // FeatureEngineering) a real version-1 file_path to chain off of.
+      rawFile,
     })
     onNext?.('diagnose', {})
   }
 
   return (
     <div style={{
-      minHeight: '100vh', background: C.bg, padding: '28px 32px 64px',
+      minHeight: '100vh', background: C.bg,
       fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
       transition: 'background 0.2s',
     }}>
-      <div style={{ maxWidth: 1000, margin: '0 auto' }}>
-
-        {/* Top strip */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 16, color: C.primary }}>△</span>
-            <span style={{ fontSize: 13, fontWeight: 900, color: C.text, letterSpacing: 0.5 }}>PRISM</span>
-            <span style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.primary,
-              background: C.primarySoft, padding: '3px 10px', borderRadius: 20,
-            }}>STAGE 1</span>
-          </div>
-          <ThemeToggle dark={dark} onToggle={() => setDark(d => !d)} />
-        </div>
+      <TopNav active={active || 'upload'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '28px 32px 64px' }}>
 
         {/* Two-column region: left content dims when drawer is open */}
         <div style={{

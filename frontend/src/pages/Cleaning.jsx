@@ -5,31 +5,14 @@ import {
   ScatterChart, Scatter, ZAxis,
 } from 'recharts'
 import { versionsAPI, workflowAPI } from '../api'
+import { useTheme } from '../theme'
+import TopNav from '../components/TopNav'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESIGN TOKENS (light theme)
+// DESIGN TOKENS now come from ../theme.jsx (shared DARK/LIGHT + useTheme()),
+// not a page-local `const C` — every component below that reads `C.xxx`
+// gets it via `const { C } = useTheme()` at the top of its own body.
 // ─────────────────────────────────────────────────────────────────────────────
-const C = {
-  bg:         '#f8fafc',
-  white:      '#ffffff',
-  card:       '#ffffff',
-  border:     '#e2e8f0',
-  primary:    '#6366f1',
-  primarySoft:'rgba(99,102,241,0.08)',
-  success:    '#10b981',
-  successSoft:'rgba(16,185,129,0.1)',
-  warning:    '#f59e0b',
-  warningSoft:'rgba(245,158,11,0.1)',
-  danger:     '#ef4444',
-  dangerSoft: 'rgba(239,68,68,0.08)',
-  text:       '#1e293b',
-  muted:      '#64748b',
-  light:      '#f1f5f9',
-  amber:      '#f59e0b',
-  pink:       '#ec4899',
-  indigo:     '#6366f1',
-  slate:      '#334155',
-}
 
 const shadow  = '0 4px 24px rgba(0,0,0,0.08)'
 const shadow2 = '0 1px 4px rgba(0,0,0,0.06)'
@@ -48,8 +31,9 @@ const btn = (bg, color='white', extra={}) => ({
 const STEP_ORDER = {
   upload: 1, diagnose: 2,
   cleaning_duplicates: 3, cleaning_outliers: 4, cleaning_missing: 5,
-  encoding: 6, sampling: 7, feature_selection: 8,
-  training: 9, feature_impact: 10, report: 11,
+  encoding: 6, feature_engineering: 7,
+  sampling: 8, data_readiness: 9, feature_selection: 10,
+  training: 11, feature_impact: 12, report: 13,
 }
 
 const STAGE_NUMBER = 3
@@ -72,7 +56,10 @@ const STEP_INFO = {
 // ─────────────────────────────────────────────────────────────────────────────
 // UTILS — unchanged from the previous version of this file
 // ─────────────────────────────────────────────────────────────────────────────
-const API = 'http://localhost:8001'
+// 127.0.0.1, not "localhost" — see frontend/src/api.js for why (dual-stack
+// localhost resolution can pick ::1, which this IPv4-only server doesn't
+// listen on, surfacing as a bare "Failed to fetch").
+const API = 'http://127.0.0.1:8001'
 
 const callCleaning = async (endpoint, body) => {
   const res = await fetch(`${API}/cleaning/${endpoint}`, {
@@ -109,28 +96,11 @@ const computeOutliers = (allValues, method, zThresh, iqrMult, stats) => {
   })
 }
 
-const computeHistBins = (allValues, numBins = 35) => {
-  const vals = allValues.map(v => v.value)
-  const mn = Math.min(...vals), mx = Math.max(...vals)
-  if (mn === mx) return [{ mid: mn, count: vals.length }]
-  const binSize = (mx - mn) / numBins
-  const bins = Array.from({ length: numBins }, (_, i) => ({
-    mid: mn + (i + 0.5) * binSize,
-    start: mn + i * binSize,
-    end: mn + (i + 1) * binSize,
-    count: 0,
-  }))
-  vals.forEach(v => {
-    const idx = Math.min(Math.floor((v - mn) / binSize), numBins - 1)
-    bins[idx].count++
-  })
-  return bins
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // STRIP PLOT (custom SVG — supports click-to-toggle outlier dots) — UNCHANGED
 // ─────────────────────────────────────────────────────────────────────────────
 function StripPlot({ computedValues, stats, method, zThresh, iqrMult, keptRows, onToggleRow }) {
+  const { C } = useTheme()
   const W = 560, H = 200, PL = 52, PR = 24, PT = 16, PB = 36
 
   const vals = computedValues.map(v => v.value)
@@ -223,6 +193,7 @@ function StripPlot({ computedValues, stats, method, zThresh, iqrMult, keptRows, 
 // MISSING VALUE MATRIX (custom SVG — missingno.matrix style) — UNCHANGED
 // ─────────────────────────────────────────────────────────────────────────────
 function MissingMatrix({ matrixData }) {
+  const { C } = useTheme()
   if (!matrixData) return null
   const { columns, rows, total_rows, sample_rows } = matrixData
   const cellW = Math.max(14, Math.min(48, 680 / columns.length))
@@ -303,6 +274,7 @@ function MissingMatrix({ matrixData }) {
 // grid column gives it (ResponsiveContainer width="100%").
 // ─────────────────────────────────────────────────────────────────────────────
 function MissingBarChart({ barData }) {
+  const { C } = useTheme()
   const sorted = [...barData].sort((a, b) => a.present_pct - b.present_pct)
   return (
     <ResponsiveContainer width="100%" height={320}>
@@ -332,6 +304,7 @@ function MissingBarChart({ barData }) {
 // NEW: OUTLIER COLUMN BAR CHART — horizontal, one bar per column, clickable
 // ─────────────────────────────────────────────────────────────────────────────
 function OutlierColumnBarChart({ columnSummary, onSelectColumn, compact = false }) {
+  const { C } = useTheme()
   const [hoveredCol, setHoveredCol] = useState(null)
   const maxOut = Math.max(...columnSummary.map(c => c.n_outliers), 1)
   const labelWidth = compact ? 62 : 130
@@ -399,6 +372,7 @@ function OutlierColumnBarChart({ columnSummary, onSelectColumn, compact = false 
 // per-column imputation table with a small colored progress bar
 // ─────────────────────────────────────────────────────────────────────────────
 function CompletenessBar({ presentPct }) {
+  const { C } = useTheme()
   const pct = presentPct * 100
   const color = pct > 90 ? C.success : pct > 60 ? C.warning : C.danger
   return (
@@ -416,6 +390,7 @@ function CompletenessBar({ presentPct }) {
 // table) with a full-screen modal expand option
 // ─────────────────────────────────────────────────────────────────────────────
 function ExpandableChart({ title, subtitle, children, minHeight = 260 }) {
+  const { C } = useTheme()
   const [expanded, setExpanded] = useState(false)
   return (
     <div style={{ position: 'relative', background: C.white, border: `1px solid ${C.border}`,
@@ -467,6 +442,7 @@ function ExpandableChart({ title, subtitle, children, minHeight = 260 }) {
 // chart, so multiple rails can sit side by side and collapse independently.
 // ─────────────────────────────────────────────────────────────────────────────
 function CollapsibleRail({ label, isOpen, setIsOpen, width = 200, collapsedHeight = 120, children }) {
+  const { C } = useTheme()
   if (!isOpen) {
     return (
       <div style={{ width: 28, minWidth: 28, marginRight: 12 }}>
@@ -501,7 +477,31 @@ function CollapsibleRail({ label, isOpen, setIsOpen, width = 200, collapsedHeigh
   )
 }
 
+// Same card chrome as CollapsibleRail, but collapses by hiding its content
+// (shrinking toward the TOP) rather than by narrowing into a vertical pill
+// (shrinking toward the LEFT) — for the "Outliers per Column" chart, which
+// needs to stay full-width beside the Columns rail rather than living in
+// its own separately-sized rail.
+function CollapsibleSectionV({ label, isOpen, setIsOpen, children }) {
+  const { C } = useTheme()
+  return (
+    <div style={{ width: '100%', background: C.white, border: `1px solid ${C.border}`,
+      borderRadius: 12, boxShadow: shadow2, overflow: 'hidden' }}>
+      <div onClick={() => setIsOpen(o => !o)}
+        style={{ padding: '10px 12px', fontWeight: 700, fontSize: 11, letterSpacing: 1,
+          textTransform: 'uppercase', color: C.muted, cursor: 'pointer',
+          borderBottom: isOpen ? `1px solid ${C.border}` : 'none',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {label}
+        <span style={{ fontSize: 10 }}>{isOpen ? '▲' : '▼'}</span>
+      </div>
+      {isOpen && <div style={{ padding: '10px 12px' }}>{children}</div>}
+    </div>
+  )
+}
+
 function ColumnListItems({ columns, selected, onSelect, countsMap = {}, colorKey }) {
+  const { C } = useTheme()
   const colColors = { dup: C.warning, out: C.danger, mis: C.primary }
   const accent = colColors[colorKey] || C.primary
   return columns.map(col => {
@@ -555,6 +555,7 @@ function ColumnPanel({ columns, selected, onSelect, countsMap = {}, colorKey, ch
 // IQR/Z-Score toggle + threshold on the right, in one clear horizontal card
 // ─────────────────────────────────────────────────────────────────────────────
 function MethodSelector({ colData, method, setMethod, zThresh, setZThresh, iqrMult, setIqrMult }) {
+  const { C } = useTheme()
   const suggested = colData.suggested_method
   const testLabel = colData.test_name === 'shapiro-wilk' ? 'Shapiro–Wilk'
     : colData.test_name === 'dagostino-pearson' ? "D'Agostino-Pearson"
@@ -666,14 +667,18 @@ function InfoWidget({ text }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED SMALL COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const thStyle = {
+// Functions, not plain objects — these used to close over a module-level
+// `const C`, which no longer exists now that theme comes from useTheme();
+// every call site below passes its own component's local `C` in.
+const thStyle = (C) => ({
   padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700,
   color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5,
   background: C.light, borderBottom: `1px solid ${C.border}`,
-}
-const tdStyle = { padding: '9px 14px', color: C.text }
+})
+const tdStyle = (C) => ({ padding: '9px 14px', color: C.text })
 
 function StatCard({ label, value, subtitle, color }) {
+  const { C } = useTheme()
   return (
     <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14,
       padding: '16px 20px', boxShadow: shadow2 }}>
@@ -690,6 +695,7 @@ function StatCard({ label, value, subtitle, color }) {
 }
 
 function Loader({ text }) {
+  const { C } = useTheme()
   return (
     <div style={{ textAlign: 'center', padding: '48px 0' }}>
       <div style={{ fontSize: 28, marginBottom: 12, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⚙</div>
@@ -700,6 +706,7 @@ function Loader({ text }) {
 }
 
 function ErrBanner({ msg }) {
+  const { C } = useTheme()
   return (
     <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`,
       borderRadius: 10, padding: '12px 16px', color: C.danger, fontSize: 13 }}>
@@ -709,6 +716,7 @@ function ErrBanner({ msg }) {
 }
 
 function Notice({ type, msg, inline }) {
+  const { C } = useTheme()
   const colors = {
     success: { bg: C.successSoft, border: C.success, color: C.success, icon: '✓' },
     warning: { bg: C.warningSoft, border: C.warning, color: C.warning, icon: '⚡' },
@@ -724,6 +732,7 @@ function Notice({ type, msg, inline }) {
 }
 
 function Legend({ color, label }) {
+  const { C } = useTheme()
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
       <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
@@ -733,6 +742,7 @@ function Legend({ color, label }) {
 }
 
 function SectionHeader({ title, description }) {
+  const { C } = useTheme()
   return (
     <div style={{ marginBottom: 24 }}>
       <h1 style={{ fontSize: 26, fontWeight: 900, color: C.text, marginBottom: 6 }}>{title}</h1>
@@ -748,9 +758,10 @@ const TABS = [
 ]
 
 function PRISMHeader({ activeTab, setActiveTab }) {
+  const { C } = useTheme()
   return (
     <div style={{ position: 'sticky', top: 0, zIndex: 100, background: C.white,
-      borderBottom: `1px solid ${C.border}`, padding: '14px 24px', borderRadius: '20px 20px 0 0' }}>
+      borderBottom: `1px solid ${C.border}`, padding: '14px 24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -783,6 +794,7 @@ function PRISMHeader({ activeTab, setActiveTab }) {
 }
 
 function VersionsBar({ versions }) {
+  const { C } = useTheme()
   return (
     <div style={{ position: 'sticky', top: 72, zIndex: 99, background: C.white,
       borderBottom: `1px solid ${C.border}`, padding: '8px 24px',
@@ -819,6 +831,7 @@ function VersionsBar({ versions }) {
 // delete downstream work (never for a plain first-time or same-step action)
 // ─────────────────────────────────────────────────────────────────────────────
 function RedoWarningModal({ toInvalidate, onConfirm, onCancel }) {
+  const { C } = useTheme()
   return (
     <div onClick={onCancel}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 3000,
@@ -856,18 +869,46 @@ function RedoWarningModal({ toInvalidate, onConfirm, onCancel }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DUPLICATES TAB
 // ─────────────────────────────────────────────────────────────────────────────
-function DuplicatesTab({ filePath, stepName, done, confirmBeforeAction, registerVersion }) {
+function DuplicatesTab({ filePath, inputFilePath, stepName, done, confirmBeforeAction, registerVersion }) {
+  const { C } = useTheme()
   const [data, setData]         = useState(null)
   const [loading, setLoading]   = useState(false)
   const [removing, setRem]      = useState(false)
   const [error, setError]       = useState('')
   const [previewMode, setPreviewMode] = useState('all') // 'all' | 'duplicates'
+  const [originalRowCount, setOriginalRowCount] = useState(null)
+
+  // "Rows before" must always reflect the step's permanent INPUT, never the
+  // main `data` fetch below — that one deliberately follows `filePath`
+  // (from getDisplayPath), which flips to THIS step's own output once
+  // `done`. Fetched from inputFilePath, a separate, stable prop that never
+  // flips, so this survives remounts (switching tabs and back, Redo, etc.)
+  // correctly instead of relying on fragile local component state.
+  useEffect(() => {
+    if (!inputFilePath) return
+    callCleaning('profile-duplicates', { file_path: inputFilePath })
+      .then(d => setOriginalRowCount(d.total_rows))
+      .catch(() => { /* falls back to data.total_rows below if this fails */ })
+  }, [inputFilePath])
 
   useEffect(() => {
     if (!filePath) return
     setLoading(true); setError('')
     callCleaning('profile-duplicates', { file_path: filePath })
-      .then(setData).catch(e => setError(e.message)).finally(() => setLoading(false))
+      .then(d => {
+        setData(d)
+        // The "show duplicates only" toggle is local UI state that isn't
+        // reset by a filePath change on its own. If the user had it on
+        // while exploring, then removed duplicates, filePath flips to the
+        // post-removal file (via getDisplayPath) and this effect refetches
+        // against it — but that file now has zero rows flagged `_is_dup`,
+        // so filtering by "duplicates only" against it silently produced a
+        // genuinely empty table, even though the dataset itself wasn't
+        // empty. Falling back to 'all' whenever there's nothing left to
+        // filter for closes that gap regardless of which path got here.
+        if (d.total_dup_rows === 0) setPreviewMode('all')
+      })
+      .catch(e => setError(e.message)).finally(() => setLoading(false))
   }, [filePath])
 
   const remove = async () => {
@@ -892,14 +933,37 @@ function DuplicatesTab({ filePath, stepName, done, confirmBeforeAction, register
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+      {/* "Rows after" previously always rendered, showing data.total_rows
+          (the SAME number as "Rows before") with a "pending removal"
+          subtitle before the user had done anything — reading exactly like
+          a completed result that just happened to remove zero rows. Now it
+          only renders once the operation has actually run, matching the
+          "don't claim a result that hasn't happened yet" requirement. Once
+          `done`, filePath has already flipped to the post-removal file (via
+          getDisplayPath) and `data` has already been refetched against it —
+          so `data.total_rows - data.real_duplicates` is the real, current
+          post-removal count either way (it's also correct as a same-render
+          prediction the instant `done` flips true, before that refetch
+          resolves, since it's exactly "original total minus what WILL be
+          removed" by definition). */}
+      <div style={{ display: 'grid', gridTemplateColumns: done ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
         <StatCard label="Duplicate rows" value={data.total_dup_rows} subtitle="exact row matches" color={C.warning} />
         <StatCard label="Duplicate groups" value={data.total_groups} subtitle="sets of matching rows" color={C.warning} />
-        <StatCard label="Rows before" value={data.total_rows} subtitle="original dataset" color={C.primary} />
-        <StatCard label="Rows after"
-          value={done ? data.total_rows - data.real_duplicates : data.total_rows}
-          subtitle={done ? 'after removal' : 'pending removal'}
-          color={done ? C.success : '#94a3b8'} />
+        {/* originalRowCount comes from a fixed, never-flipping inputFilePath
+            fetch (see the effect above) — data.total_rows would silently
+            become the POST-removal count too once `done` (data is refetched
+            against the new file via filePath/getDisplayPath), which was the
+            actual bug: "Rows before" started reading the same value as
+            "Rows after". Falls back to data.total_rows only pre-removal,
+            while the separate fetch is still in flight — same value either
+            way at that point, so there's no visible flash. */}
+        <StatCard label="Rows before" value={originalRowCount ?? data.total_rows} subtitle="original dataset" color={C.primary} />
+        {done && (
+          <StatCard label="Rows after"
+            value={data.total_rows}
+            subtitle="after removal"
+            color={C.success} />
+        )}
       </div>
 
       <InfoWidget text={infoText} />
@@ -930,9 +994,9 @@ function DuplicatesTab({ filePath, stepName, done, confirmBeforeAction, register
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
                 <tr>
-                  <th style={thStyle}>#</th>
-                  {data.columns.map(col => <th key={col} style={thStyle}>{col}</th>)}
-                  <th style={thStyle}>FLAG</th>
+                  <th style={thStyle(C)}>#</th>
+                  {data.columns.map(col => <th key={col} style={thStyle(C)}>{col}</th>)}
+                  <th style={thStyle(C)}>FLAG</th>
                 </tr>
               </thead>
               <tbody>
@@ -946,11 +1010,11 @@ function DuplicatesTab({ filePath, stepName, done, confirmBeforeAction, register
                       background: isDup ? '#fffbeb' : 'transparent',
                       borderLeft: isDup ? '3px solid #f59e0b' : '3px solid transparent',
                     }}>
-                      <td style={tdStyle}>{ri + 1}</td>
+                      <td style={tdStyle(C)}>{ri + 1}</td>
                       {data.columns.map(col => (
-                        <td key={col} style={tdStyle}>{String(row[col] ?? '')}</td>
+                        <td key={col} style={tdStyle(C)}>{String(row[col] ?? '')}</td>
                       ))}
-                      <td style={tdStyle}>
+                      <td style={tdStyle(C)}>
                         {row._dup_group ? (
                           <span style={{ fontSize: 11, fontWeight: 700, color: '#92400e',
                             background: 'rgba(245,158,11,0.2)', border: '1px solid #fde68a',
@@ -981,7 +1045,7 @@ function DuplicatesTab({ filePath, stepName, done, confirmBeforeAction, register
           <>
             <Notice type="success" msg="✓ Duplicate removal complete for this dataset." />
             <button onClick={redo}
-              style={{ fontSize: 12, color: C.muted, background: 'transparent', border: `1px solid ${C.border}`,
+              style={{ fontSize: 12, color: C.danger, background: C.dangerSoft, border: `1px solid ${C.danger}`,
                 borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontWeight: 600 }}>
               ↺ Redo this step
             </button>
@@ -996,6 +1060,7 @@ function DuplicatesTab({ filePath, stepName, done, confirmBeforeAction, register
 // OUTLIERS TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVersion, initialSettings, saveSettings }) {
+  const { C } = useTheme()
   const [globalData, setGlobal]     = useState(null)
   const [colData, setColData]       = useState(null)
   const [selCol, setSelCol]         = useState(null)
@@ -1027,6 +1092,14 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
     // it just doesn't take over the main content area or disappear outright.
     setChartRailOpen(false)
     setSelCol(col); setColData(null); setColLoad(true); setKeptRows(new Set())
+    // BUG FIX: zThresh/iqrMult are shared state across every column's detail
+    // view. Without resetting them here, a threshold left over from a
+    // previously-viewed column silently applies to this one too, producing
+    // a count that matches neither the true default nor anything the user
+    // intentionally set for THIS column — confirmed live to cause exactly
+    // the "column list says 50, remove button says 44" class of mismatch.
+    setZThresh(3.0)
+    setIqrMult(1.5)
     try {
       const d = await callCleaning('profile-outliers-column', { file_path: filePath, column: col })
       setColData(d)
@@ -1057,38 +1130,60 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
       })
       await registerVersion(stepName, res.new_file_path, 'Outliers Removed', res.new_row_count,
         { column: selCol, rows_removed: res.rows_removed })
+      // Optimistic badge update — the real fetch triggered by the filePath
+      // change (via getDisplayPath, once this version is registered) will
+      // confirm/correct this moments later, but this makes the column list
+      // and stat cards feel instant instead of momentarily stale. Subtract
+      // rather than hard-set to 0: any rows the user chose to "keep" are
+      // still outliers by the default threshold and should still count.
+      const removedCount = toRemove.length
+      setGlobal(prev => prev ? {
+        ...prev,
+        total_outliers: Math.max(0, (prev.total_outliers || 0) - removedCount),
+        column_summary: prev.column_summary.map(c =>
+          c.column === selCol ? { ...c, n_outliers: Math.max(0, c.n_outliers - removedCount) } : c
+        ),
+      } : prev)
       setSelCol(null)
       setChartRailOpen(true)
     } catch (e) { setError(e.message) }
     finally { setRemoving(false) }
   }
 
-  // "Remove All Outliers" from the global (no column selected) view: chains
-  // remove-outliers once per affected column, using each call's returned
-  // new_file_path as the next call's input — the union of every column's
-  // outlier rows, without needing a new backend endpoint.
+  // "Remove All Outliers" from the global (no column selected) view.
+  //
+  // BUG FIX: this used to loop columns sequentially, chaining the working
+  // file forward (remove column A's outliers, then profile+remove column
+  // B against the already-shrunk file, ...). Dropping rows for column B
+  // shifts the mean/std/Q1/Q3 of every OTHER column too — including ones
+  // already "finished" earlier in the same pass — so column A could end
+  // the pass with newly-emerged outliers under its shifted post-removal
+  // stats, with no re-check. That's why some outliers kept surviving
+  // "Remove All". Fixed by computing every column's outlier row indices
+  // in ONE atomic pass against the ORIGINAL file (single backend call,
+  // no intermediate stat drift possible), then removing the full union
+  // in a single remove-outliers call.
   const removeAllOutliers = async () => {
     if (!globalData) return
     const ok = await confirmBeforeAction(stepName)
     if (!ok) return
     setRemovingAll(true)
-    let workingPath = filePath
-    let totalRemoved = 0
-    const columnsWithOutliers = globalData.column_summary.filter(c => c.n_outliers > 0)
     try {
-      for (const col of columnsWithOutliers) {
-        const detail = await callCleaning('profile-outliers-column', { file_path: workingPath, column: col.column })
-        const computed = computeOutliers(detail.all_values, detail.suggested_method, 3.0, 1.5, detail.stats)
-        const rowsToRemove = computed.filter(v => v.isOutlier).map(v => v.row_index)
-        if (rowsToRemove.length === 0) continue
-        const res = await callCleaning('remove-outliers', {
-          file_path: workingPath, column: col.column, rows_to_remove: rowsToRemove,
-        })
-        workingPath = res.new_file_path
-        totalRemoved += res.rows_removed
-      }
-      await registerVersion(stepName, workingPath, 'Outliers Removed', null,
-        { rows_removed: totalRemoved, columns_cleaned: columnsWithOutliers.length })
+      const indexRes = await callCleaning('get-all-outlier-indices', { file_path: filePath })
+      if (indexRes.outlier_indices.length === 0) return
+
+      const res = await callCleaning('remove-outliers', {
+        file_path: filePath, column: '__all_columns__', rows_to_remove: indexRes.outlier_indices,
+      })
+      await registerVersion(stepName, res.new_file_path, 'Outliers Removed', res.new_row_count,
+        { rows_removed: res.rows_removed, per_column_counts: indexRes.per_column_counts })
+
+      // Optimistic: every column is now clean at the default threshold —
+      // the real refetch (triggered by the filePath change) confirms this.
+      setGlobal(prev => prev ? {
+        ...prev, total_outliers: 0,
+        column_summary: prev.column_summary.map(c => ({ ...c, n_outliers: 0 })),
+      } : prev)
     } catch (e) { setError(e.message) }
     finally { setRemovingAll(false) }
   }
@@ -1103,7 +1198,22 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
   const outlierRows = computedValues.filter(v => v.isOutlier)
   const toRemoveCount = outlierRows.filter(v => !keptRows.has(v.row_index)).length
 
-  const histBins = useMemo(() => colData ? computeHistBins(colData.all_values) : [], [colData])
+  // BUG FIX: this used to call computeHistBins(colData.all_values) — but
+  // all_values is not the full column, it's every true outlier plus up to
+  // 1500 *randomly sampled* non-outlier rows. On datasets with more than
+  // 1500 normal rows per column, that distorts the histogram's shape, and
+  // the shape visibly shifts on every re-fetch because the sample changes.
+  // The backend already computes a correct full-dataset histogram
+  // (colData.histogram, via np.histogram over the complete column) — use
+  // that directly instead. Deliberately depends only on colData, NOT on
+  // zThresh/iqrMult/method: the underlying data distribution doesn't
+  // change just because the user moves the detection threshold — only the
+  // reference lines and which bars are colored "outlier zone" should move.
+  const histBins = useMemo(() => {
+    if (!colData?.histogram) return []
+    const { bin_mids, bin_edges, counts } = colData.histogram
+    return bin_mids.map((mid, i) => ({ mid, start: bin_edges[i], end: bin_edges[i + 1], count: counts[i] }))
+  }, [colData])
 
   const getBounds = () => {
     if (!colData) return {}
@@ -1143,27 +1253,34 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
           padding: '8px 16px', marginBottom: 16 }}>
           <span style={{ fontSize: 12, color: C.success, fontWeight: 600 }}>✓ Progress saved for this step</span>
           <button onClick={startOver}
-            style={{ fontSize: 11, color: C.muted, background: 'white', border: `1px solid ${C.border}`,
+            style={{ fontSize: 11, color: C.danger, background: C.dangerSoft, border: `1px solid ${C.danger}`,
               borderRadius: 8, padding: '5px 12px', cursor: 'pointer', fontWeight: 600 }}>
             ↺ Start over
           </button>
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', width: '100%' }}>
+      {/* ROW 1 — Columns list (unchanged, still collapses horizontally into
+          its own rail) beside the outliers-per-column chart, which now gets
+          the REST of the row's width (previously boxed into its own narrow
+          260px rail) and collapses vertically instead of horizontally, so
+          shrinking it never squeezes it toward the left. */}
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', width: '100%', gap: 0 }}>
         <CollapsibleRail label="Columns" isOpen={colListOpen} setIsOpen={setColListOpen}>
           <ColumnListItems columns={numCols} selected={selCol} onSelect={loadColumn}
             countsMap={colCounts} colorKey="out" />
         </CollapsibleRail>
 
-        <CollapsibleRail label="Outliers per Column" isOpen={chartRailOpen} setIsOpen={setChartRailOpen}
-          width={260} collapsedHeight={170}>
-          <div style={{ padding: '8px 6px' }}>
-            <OutlierColumnBarChart columnSummary={globalData.column_summary} onSelectColumn={loadColumn} compact />
-          </div>
-        </CollapsibleRail>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <CollapsibleSectionV label="Outliers per Column" isOpen={chartRailOpen} setIsOpen={setChartRailOpen}>
+            <OutlierColumnBarChart columnSummary={globalData.column_summary} onSelectColumn={loadColumn} />
+          </CollapsibleSectionV>
+        </div>
+      </div>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
+      {/* ROW 2 — below Row 1, full width: either the PCA/Outlier-Score pair
+          (50/50) when no column is selected, or the column detail view. */}
+      <div style={{ marginTop: 20 }}>
         {!selCol && (
           <div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -1237,9 +1354,12 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
             {colLoading && <Loader text={`Analysing "${selCol}"…`} />}
             {!colLoading && colData && (
               <>
-                <MethodSelector colData={colData} method={method} setMethod={setMethod}
-                  zThresh={zThresh} setZThresh={setZThresh} iqrMult={iqrMult} setIqrMult={setIqrMult} />
-
+                {/* Order is deliberately GRAPH → SLIDER/THRESHOLD CONTROL →
+                    TABLE (MethodSelector, which holds the threshold slider,
+                    used to render ABOVE the graph — moved down to sit
+                    between the graph and the outlier table instead; nothing
+                    about the graph, MethodSelector, or the table's own
+                    functionality changed, only this ordering). */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 14 }}>
                   {['histogram', 'strip'].map(t => (
                     <button key={t} onClick={() => setGraphType(t)}
@@ -1309,6 +1429,11 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
                   </ExpandableChart>
                 )}
 
+                <div style={{ marginTop: 16, marginBottom: 4 }}>
+                  <MethodSelector colData={colData} method={method} setMethod={setMethod}
+                    zThresh={zThresh} setZThresh={setZThresh} iqrMult={iqrMult} setIqrMult={setIqrMult} />
+                </div>
+
                 {outlierRows.length > 0 && (
                   <div style={{ marginTop: 20 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -1328,11 +1453,11 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead style={{ position: 'sticky', top: 0, background: C.light, zIndex: 2 }}>
                           <tr>
-                            <th style={thStyle}>Row #</th>
-                            <th style={thStyle}>Value</th>
-                            <th style={thStyle}>Score</th>
-                            <th style={thStyle}>Type</th>
-                            <th style={thStyle}>Action</th>
+                            <th style={thStyle(C)}>Row #</th>
+                            <th style={thStyle(C)}>Value</th>
+                            <th style={thStyle(C)}>Score</th>
+                            <th style={thStyle(C)}>Type</th>
+                            <th style={thStyle(C)}>Action</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1341,10 +1466,10 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
                             const isAbove = v.value > (method === 'zscore' ? colData.stats.mean : colData.stats.Q3)
                             return (
                               <tr key={v.row_index} style={{ background: keep ? 'rgba(148,163,184,0.08)' : C.dangerSoft }}>
-                                <td style={tdStyle}>{v.row_index}</td>
-                                <td style={{ ...tdStyle, fontWeight: 700, color: C.text }}>{v.value}</td>
-                                <td style={tdStyle}>{v.score.toFixed(3)}</td>
-                                <td style={tdStyle}>
+                                <td style={tdStyle(C)}>{v.row_index}</td>
+                                <td style={{ ...tdStyle(C), fontWeight: 700, color: C.text }}>{v.value}</td>
+                                <td style={tdStyle(C)}>{v.score.toFixed(3)}</td>
+                                <td style={tdStyle(C)}>
                                   <span style={{ fontSize: 10, fontWeight: 700,
                                     color: isAbove ? C.danger : C.warning,
                                     background: isAbove ? C.dangerSoft : C.warningSoft,
@@ -1352,7 +1477,7 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
                                     {isAbove ? 'Upper' : 'Lower'}
                                   </span>
                                 </td>
-                                <td style={tdStyle}>
+                                <td style={tdStyle(C)}>
                                   <button onClick={() => toggleRow(v.row_index)}
                                     style={{ ...btn(keep ? C.light : C.dangerSoft, keep ? C.muted : C.danger,
                                       { fontSize: 11, padding: '4px 10px' }), border: `1px solid ${keep ? C.border : C.danger}` }}>
@@ -1385,7 +1510,6 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
           </div>
         )}
       </div>
-      </div>
     </div>
   )
 }
@@ -1394,12 +1518,14 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
 // MISSING VALUES TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVersion, initialSettings, saveSettings }) {
+  const { C } = useTheme()
   const [data, setData]           = useState(null)
   const [loading, setLoading]     = useState(false)
   const [rowMin, setRowMin]       = useState(null)
   const [rowApplying, setRowApp]  = useState(false)
   const [colMethod, setColMethod] = useState(initialSettings?.missing_methods || {})
   const [applying, setApplying]   = useState(null)
+  const [applyingAll, setApplyingAll] = useState(false)
   const [results, setResults]     = useState({})
   const [error, setError]         = useState('')
 
@@ -1450,23 +1576,75 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
     finally { setApplying(null) }
   }
 
+  // Applies every column that currently has a method chosen in its
+  // dropdown, one after another. This can NOT just call applyColumn(col) in
+  // a loop: applyColumn always reads the `filePath` PROP, which only
+  // updates once the parent re-renders after registerVersion resolves — a
+  // plain async loop's closures don't "see" that future re-render, so every
+  // iteration would keep reading the SAME stale filePath and clobber each
+  // other's results instead of building on one another. Threading the
+  // backend's own res.new_file_path forward as next call's file_path sidesteps
+  // that entirely — no dependency on React's render cycle mid-loop. Only
+  // ONE version gets registered at the end (against the final, fully-
+  // imputed file), not one per column — matching registerVersion's own
+  // "collapses to exactly one version per step" convention, and avoiding
+  // N redundant Django round-trips for N columns.
+  const applyAll = async (colsWithMissing) => {
+    const cols = colsWithMissing.map(c => c.column).filter(col => colMethod[col])
+    if (!cols.length) return
+    const ok = await confirmBeforeAction(stepName)
+    if (!ok) return
+    setApplyingAll(true)
+    let currentPath = filePath
+    try {
+      for (const col of cols) {
+        const m = colMethod[col]
+        const res = await callCleaning('apply-missing-column', { file_path: currentPath, column: col, method: m })
+        setResults(prev => ({ ...prev, [col]: res }))
+        currentPath = res.new_file_path
+      }
+      await registerVersion(stepName, currentPath, 'Missing Values Imputed', null,
+        { columns: cols, methods: cols.map(c => colMethod[c]) })
+    } catch (e) { setError(e.message) }
+    finally { setApplyingAll(false) }
+  }
+
   const startOver = async () => { await confirmBeforeAction(stepName) }
 
   if (loading) return <Loader text="Analysing missing values…" />
   if (error)   return <ErrBanner msg={error} />
   if (!data)   return null
 
-  const methodOptions = (type) => {
-    const all = [
-      { value: 'mean',          label: 'Fill with mean', numOnly: true },
-      { value: 'mode',          label: 'Fill with mode', numOnly: false },
-      { value: 'knn',           label: 'KNN Imputer',    numOnly: true },
-      { value: 'interpolation', label: 'Interpolation',  numOnly: true },
-      { value: 'drop_rows',     label: 'Drop rows',      numOnly: false },
-      { value: 'drop_column',   label: 'Drop entire column', numOnly: false },
-    ]
-    return all.filter(o => type === 'numerical' || !o.numOnly)
+  // Single source of truth for every imputation method this page offers —
+  // methodOptions(type) below filters it per-column-type for the dropdown,
+  // and the "Method Descriptions" reference table further down reads the
+  // exact same list, so the two can never drift out of sync (add/remove a
+  // method here and both the dropdown AND its description update together).
+  const what = {
+    mean: 'Replaces missing values with the column’s average.',
+    mode: 'Replaces missing values with the single most frequent value in the column.',
+    knn: 'Estimates each missing value from the most similar rows (nearest neighbors), using the other numeric columns.',
+    interpolation: 'Fills gaps by interpolating linearly between the nearest non-missing values before and after.',
+    drop_rows: 'Removes every row that’s missing a value in this column.',
+    drop_column: 'Removes the column entirely from the dataset.',
   }
+  const whenTo = {
+    mean: 'Numeric columns with a roughly symmetric distribution, no extreme outliers.',
+    mode: 'Categorical columns, or a numeric column with one dominant repeated value.',
+    knn: 'Numeric columns where similar rows are a good predictor of the missing value.',
+    interpolation: 'Numeric columns with a natural order — time-ordered or otherwise sequential data.',
+    drop_rows: 'Missing values in this column are rare and losing those rows is acceptable.',
+    drop_column: 'The column is missing too much data to impute reliably, or isn’t needed.',
+  }
+  const ALL_METHODS = [
+    { value: 'mean',          label: 'Fill with mean', numOnly: true },
+    { value: 'mode',          label: 'Fill with mode', numOnly: false },
+    { value: 'knn',           label: 'KNN Imputer',    numOnly: true },
+    { value: 'interpolation', label: 'Interpolation',  numOnly: true },
+    { value: 'drop_rows',     label: 'Drop rows',      numOnly: false },
+    { value: 'drop_column',   label: 'Drop entire column', numOnly: false },
+  ].map(m => ({ ...m, what: what[m.value], when: whenTo[m.value] }))
+  const methodOptions = (type) => ALL_METHODS.filter(o => type === 'numerical' || !o.numOnly)
 
   const colsWithMissing = data.bar_data.filter(b => b.missing > 0)
 
@@ -1486,7 +1664,7 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
           padding: '8px 16px', marginBottom: 20 }}>
           <span style={{ fontSize: 12, color: C.success, fontWeight: 600 }}>✓ Progress saved for this step</span>
           <button onClick={startOver}
-            style={{ fontSize: 11, color: C.muted, background: 'white', border: `1px solid ${C.border}`,
+            style={{ fontSize: 11, color: C.danger, background: C.dangerSoft, border: `1px solid ${C.danger}`,
               borderRadius: 8, padding: '5px 12px', cursor: 'pointer', fontWeight: 600 }}>
             ↺ Start over
           </button>
@@ -1551,7 +1729,21 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
       </div>
 
       <div>
-        <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, color: C.text }}>Per-Column Imputation</h4>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h4 style={{ fontSize: 14, fontWeight: 700, margin: 0, color: C.text }}>Per-Column Imputation</h4>
+          {colsWithMissing.length > 0 && (
+            <button
+              onClick={() => applyAll(colsWithMissing)}
+              disabled={applyingAll || applying || !colsWithMissing.some(c => colMethod[c.column])}
+              title={!colsWithMissing.some(c => colMethod[c.column]) ? 'Choose a method for at least one column first' : undefined}
+              style={btn(C.slate, 'white', { padding: '8px 18px', fontSize: 12.5,
+                opacity: (applyingAll || applying || !colsWithMissing.some(c => colMethod[c.column])) ? 0.5 : 1 })}>
+              {applyingAll
+                ? '⏳ Applying all…'
+                : `Apply All (${colsWithMissing.filter(c => colMethod[c.column]).length} configured)`}
+            </button>
+          )}
+        </div>
         {colsWithMissing.length === 0 ? (
           <Notice type="success" msg="No missing values remain in this dataset." />
         ) : (
@@ -1559,12 +1751,12 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: C.light }}>
-                  <th style={thStyle}>Column</th>
-                  <th style={thStyle}>Type</th>
-                  <th style={thStyle}>Missing</th>
-                  <th style={thStyle}>%</th>
-                  <th style={thStyle}>Choose method</th>
-                  <th style={thStyle}>Completeness</th>
+                  <th style={thStyle(C)}>Column</th>
+                  <th style={thStyle(C)}>Type</th>
+                  <th style={thStyle(C)}>Missing</th>
+                  <th style={thStyle(C)}>%</th>
+                  <th style={thStyle(C)}>Choose method</th>
+                  <th style={thStyle(C)}>Completeness</th>
                 </tr>
               </thead>
               <tbody>
@@ -1578,17 +1770,17 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
                     : col.present_pct
                   return (
                     <tr key={col.column} style={{ borderTop: `1px solid ${C.border}`, background: done ? C.successSoft : 'transparent' }}>
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{col.column}</td>
-                      <td style={tdStyle}>
+                      <td style={{ ...tdStyle(C), fontWeight: 600 }}>{col.column}</td>
+                      <td style={tdStyle(C)}>
                         <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, fontWeight: 600,
                           background: col.type === 'numerical' ? 'rgba(99,102,241,0.1)' : 'rgba(20,184,166,0.1)',
                           color: col.type === 'numerical' ? C.primary : '#0d9488' }}>
                           {col.type}
                         </span>
                       </td>
-                      <td style={{ ...tdStyle, color: sevColor, fontWeight: 700 }}>{col.missing}</td>
-                      <td style={{ ...tdStyle, color: sevColor }}>{col.missing_pct}%</td>
-                      <td style={tdStyle}>
+                      <td style={{ ...tdStyle(C), color: sevColor, fontWeight: 700 }}>{col.missing}</td>
+                      <td style={{ ...tdStyle(C), color: sevColor }}>{col.missing_pct}%</td>
+                      <td style={tdStyle(C)}>
                         {done ? (
                           <span style={{ color: C.success, fontSize: 12 }}>✓ {colMethod[col.column]}</span>
                         ) : (
@@ -1613,7 +1805,7 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
                           </div>
                         )}
                       </td>
-                      <td style={tdStyle}>
+                      <td style={tdStyle(C)}>
                         <CompletenessBar presentPct={currentPresentPct} />
                       </td>
                     </tr>
@@ -1624,6 +1816,38 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
           </div>
         )}
       </div>
+
+      {/* Reads ALL_METHODS directly — the exact same list that drives the
+          "Choose method" dropdowns above (filtered per-column-type there,
+          shown here unfiltered as one reference covering every method the
+          page can offer), so this table can never list a method that isn't
+          actually selectable, or omit one that is. */}
+      <div style={{ marginTop: 28 }}>
+        <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: C.text }}>Imputation Method Reference</h4>
+        <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+          What each method in the "Choose method" dropdown above actually does, and when it's the right choice.
+        </p>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: C.light }}>
+                <th style={thStyle(C)}>Method</th>
+                <th style={thStyle(C)}>What it does</th>
+                <th style={thStyle(C)}>When to use it</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ALL_METHODS.map(m => (
+                <tr key={m.value} style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ ...tdStyle(C), fontWeight: 700, color: C.text, whiteSpace: 'nowrap' }}>{m.label}</td>
+                  <td style={{ ...tdStyle(C), whiteSpace: 'normal' }}>{m.what}</td>
+                  <td style={{ ...tdStyle(C), whiteSpace: 'normal', color: C.muted }}>{m.when}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1632,6 +1856,7 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
 // MAIN CLEANING PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 export default function CleaningPage({ projectData, onNext, onUpdateData }) {
+  const { C } = useTheme()
   const { projectId } = projectData
   const [activeTab, setActiveTab] = useState('duplicates')
   const [versions, setVersions] = useState([{
@@ -1679,6 +1904,22 @@ export default function CleaningPage({ projectData, onNext, onUpdateData }) {
     const thisStepVersion = versions.find(v => v.stepName === stepName)
     if (thisStepVersion) return thisStepVersion.filePath
 
+    const order = STEP_ORDER[stepName]
+    const candidates = versions
+      .filter(v => STEP_ORDER[v.stepName] < order)
+      .sort((a, b) => STEP_ORDER[b.stepName] - STEP_ORDER[a.stepName])
+    return candidates[0]?.filePath || projectData.filePath
+  }, [versions, projectData.filePath])
+
+  // ALWAYS the nearest STRICTLY EARLIER version's path — unlike
+  // getDisplayPath, this never flips to stepName's own output once one
+  // exists. Needed for a "before" stat (like Duplicates' "Rows before")
+  // that must stay anchored to the step's permanent input: getDisplayPath
+  // was the wrong choice there because once a step is done, filePath (from
+  // getDisplayPath) flips to the step's OWN output, so a stat card reading
+  // straight off that refetched data silently started showing the post-
+  // removal count for BOTH "before" and "after" — the exact bug this fixes.
+  const getInputPath = useCallback((stepName) => {
     const order = STEP_ORDER[stepName]
     const candidates = versions
       .filter(v => STEP_ORDER[v.stepName] < order)
@@ -1757,17 +1998,23 @@ export default function CleaningPage({ projectData, onNext, onUpdateData }) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 0' }}>
         <div style={{ fontSize: 36, marginBottom: 12 }}>⚠️</div>
-        <p style={{ color: C.muted }}>No dataset found. Please go back and upload a file.</p>
-        <button style={{ ...btn(C.primary), marginTop: 16 }} onClick={() => onNext('upload', {})}>
-          ← Back to Upload
-        </button>
+        <p style={{ color: C.muted }}>No dataset found. Use "Upload" in the navigation bar above to start over.</p>
       </div>
     )
   }
 
   return (
     <div className="anim-up">
-      <div style={{ background: C.white, borderRadius: 20, border: `1.5px solid ${C.border}`, boxShadow: shadow, overflow: 'hidden' }}>
+      {/* No bordered/rounded/shadowed "card" wrapper around the whole page
+          content anymore — that treatment made this page read as a smaller
+          floating panel inset within the page rather than the page itself,
+          which is what kept looking like a width bug even after the actual
+          maxWidth constraint (in App.jsx, removed separately) was fixed.
+          Every other page in the pipeline (Diagnose, Encoding, Sampling,
+          Visualization) renders full-bleed with no such outer card, so this
+          now matches that convention — purely cosmetic, no data/state logic
+          touched below this point. */}
+      <div>
         <PRISMHeader activeTab={activeTab} setActiveTab={setActiveTab} />
         <VersionsBar versions={versions} />
 
@@ -1777,6 +2024,7 @@ export default function CleaningPage({ projectData, onNext, onUpdateData }) {
               <SectionHeader title={STEP_INFO.duplicates.title} description={STEP_INFO.duplicates.description} />
               <DuplicatesTab
                 filePath={getDisplayPath('cleaning_duplicates')}
+                inputFilePath={getInputPath('cleaning_duplicates')}
                 stepName="cleaning_duplicates"
                 done={isStepDone('cleaning_duplicates')}
                 confirmBeforeAction={confirmBeforeAction}

@@ -3,32 +3,28 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, LabelList,
   ResponsiveContainer, ScatterChart, Scatter, ZAxis,
 } from 'recharts'
+import { DARK, useTheme } from '../theme'
+import TopNav from '../components/TopNav'
+import SharedVersionsBar from '../components/VersionsBar'
+
+// 127.0.0.1, not "localhost" — dual-stack landmine on this machine, see
+// docs/PROJECT_HANDOFF.md §11.2.
+const ML_API = 'http://127.0.0.1:8001'
+
+const callDiagnose = async (endpoint, body) => {
+  const res = await fetch(`${ML_API}/diagnose/${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `Error ${res.status}`) }
+  return res.json()
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THEME — this page defaults to DARK (matching the reference screenshot and
-// its teal/cyan accent), with a light equivalent for the toggle. This is the
-// opposite default of Upload.jsx (light-first) — intentional, since the
-// reference image for this page is dark-first and the accent color here
-// (teal/cyan) is distinct from the indigo used on Upload/Cleaning.
+// THEME — DARK/LIGHT tokens now live in ../theme.jsx (shared across every
+// page, one toggle instead of five). Re-exported here under their original
+// names since this file still compares `C === DARK` in a couple of places.
 // ─────────────────────────────────────────────────────────────────────────────
-const DARK = {
-  bg: '#0a0e15', card: '#12161f', cardAlt: '#161b26', border: 'rgba(255,255,255,0.08)',
-  text: '#e8ecf2', muted: 'rgba(255,255,255,0.45)', faint: 'rgba(255,255,255,0.06)',
-  primary: '#2dd4bf', primarySoft: 'rgba(45,212,191,0.14)',
-  success: '#34d399', successSoft: 'rgba(52,211,153,0.14)',
-  warning: '#fbbf24', warningSoft: 'rgba(251,191,36,0.14)',
-  danger: '#f87171', dangerSoft: 'rgba(248,113,113,0.14)',
-  scrim: 'rgba(0,0,0,0.55)', overlayCard: '#0d1117',
-}
-const LIGHT = {
-  bg: '#f4f6f9', card: '#ffffff', cardAlt: '#f8fafc', border: '#e2e8f0',
-  text: '#1e293b', muted: '#64748b', faint: '#f1f5f9',
-  primary: '#0d9488', primarySoft: 'rgba(13,148,136,0.10)',
-  success: '#059669', successSoft: 'rgba(5,150,105,0.10)',
-  warning: '#d97706', warningSoft: 'rgba(217,119,6,0.10)',
-  danger: '#dc2626', dangerSoft: 'rgba(220,38,38,0.10)',
-  scrim: 'rgba(15,23,42,0.45)', overlayCard: '#ffffff',
-}
 const PALETTE = ['#2dd4bf', '#f59e0b', '#f87171', '#a78bfa', '#34d399', '#fb923c', '#38bdf8', '#f472b6']
 
 const shadow = '0 4px 24px rgba(0,0,0,0.18)'
@@ -322,114 +318,81 @@ function ExpandableSection({ title, subtitle, C, children, expandedContent }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TOP NAV — decorative/inert (no routing exists yet in this project); shows
-// Diagnose as the active step, matching the reference image.
-// ─────────────────────────────────────────────────────────────────────────────
-function TopNav({ C, dark, onToggleTheme }) {
-  const links = ['Workspace', 'Upload', 'Diagnose', 'Cleaning', 'Training', 'Report']
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '12px 24px', borderBottom: `1px solid ${C.border}`, background: C.card,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 16, color: C.primary }}>◈</span>
-          <span style={{ fontWeight: 900, fontSize: 15, color: C.text, letterSpacing: 0.5 }}>PRISM</span>
-        </div>
-        <div style={{ display: 'flex', gap: 22 }}>
-          {links.map(l => {
-            const active = l === 'Diagnose'
-            return (
-              <span key={l} style={{
-                fontSize: 13, fontWeight: active ? 700 : 500, color: active ? C.primary : C.muted,
-                paddingBottom: 4, borderBottom: active ? `2px solid ${C.primary}` : '2px solid transparent',
-                cursor: 'default',
-              }}>{l}</span>
-            )
-          })}
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-        <button onClick={onToggleTheme} title="Toggle theme" style={{
-          background: C.faint, border: `1px solid ${C.border}`, borderRadius: 20,
-          padding: '5px 12px', color: C.text, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>{dark ? '🌙' : '☀'} {dark ? 'Dark' : 'Light'}</button>
-        <span style={{ fontSize: 15, color: C.muted, cursor: 'default' }}>⚙</span>
-        <span style={{ fontSize: 15, color: C.muted, cursor: 'default', position: 'relative' }}>
-          🔔
-          <span style={{ position: 'absolute', top: -2, right: -2, width: 6, height: 6, borderRadius: '50%', background: C.danger }} />
-        </span>
-        <span style={{ fontSize: 15, color: C.muted, cursor: 'default' }}>👤</span>
-        <button style={btn(C.primary, dark ? '#04201c' : 'white', { padding: '8px 16px', fontSize: 11, letterSpacing: 0.5 })}>DEPLOY MODEL</button>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // DATASET STATUS BAR
 // ─────────────────────────────────────────────────────────────────────────────
 function StatusDivider({ C }) {
   return <div style={{ width: 1, height: 30, background: C.border, margin: '0 18px' }} />
 }
-function StatusBar({ C, filename, health, missingPct, outlierTotal, dupCount, targetCol, balance }) {
+function StatusBar({ C, filename, health, missingPct, outlierTotal, dupCount, targetCol, balance, onRedo }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', padding: '12px 24px', background: C.cardAlt,
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '12px 24px', background: C.cardAlt,
       borderBottom: `1px solid ${C.border}`, flexWrap: 'wrap', rowGap: 10,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 16, color: C.muted }}>▤</span>
-        <div>
-          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>CURRENT DATASET</div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{filename}</div>
-        </div>
-      </div>
-      <StatusDivider C={C} />
-      <div>
-        <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted, marginBottom: 3 }}>HEALTH SCORE</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: C.text }}>{health}/100</span>
-          <div style={{ width: 60, height: 5, borderRadius: 3, background: C.faint, overflow: 'hidden' }}>
-            <div style={{ width: `${health}%`, height: '100%', background: health >= 80 ? C.success : health >= 60 ? C.warning : C.danger }} />
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 16, color: C.muted }}>▤</span>
+          <div>
+            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>CURRENT DATASET</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{filename}</div>
           </div>
         </div>
-      </div>
-      <StatusDivider C={C} />
-      <div>
-        <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>MISSING VALUES</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: missingPct > 10 ? C.warning : C.text }}>{missingPct}%</div>
-      </div>
-      <StatusDivider C={C} />
-      <div>
-        <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>OUTLIERS</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: outlierTotal > 0 ? C.danger : C.text }}>{outlierTotal} Detected</div>
-      </div>
-      <StatusDivider C={C} />
-      <div>
-        <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>DUPLICATES</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{dupCount} Rows</div>
-      </div>
-      {targetCol && (
-        <>
-          <StatusDivider C={C} />
-          <div>
-            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>TARGET: {targetCol.toUpperCase()}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 60, height: 5, borderRadius: 3, background: C.faint, overflow: 'hidden', display: 'flex' }}>
-                {balance?.entries?.slice(0, 4).map((e, i) => (
-                  <div key={e.value} style={{ width: `${e.pct}%`, height: '100%', background: PALETTE[i % PALETTE.length] }} />
-                ))}
-              </div>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: balance?.level === 'Balanced' ? C.success : C.warning }}>
-                {balance?.level}
-              </span>
+        <StatusDivider C={C} />
+        <div>
+          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted, marginBottom: 3 }}>HEALTH SCORE</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: C.text }}>{health}/100</span>
+            <div style={{ width: 60, height: 5, borderRadius: 3, background: C.faint, overflow: 'hidden' }}>
+              <div style={{ width: `${health}%`, height: '100%', background: health >= 80 ? C.success : health >= 60 ? C.warning : C.danger }} />
             </div>
           </div>
-        </>
-      )}
+        </div>
+        <StatusDivider C={C} />
+        <div>
+          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>MISSING VALUES</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: missingPct > 10 ? C.warning : C.text }}>{missingPct}%</div>
+        </div>
+        <StatusDivider C={C} />
+        <div>
+          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>OUTLIERS</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: outlierTotal > 0 ? C.danger : C.text }}>{outlierTotal} Detected</div>
+        </div>
+        <StatusDivider C={C} />
+        <div>
+          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>DUPLICATES</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{dupCount} Rows</div>
+        </div>
+        {targetCol && (
+          <>
+            <StatusDivider C={C} />
+            <div>
+              <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 1, color: C.muted }}>TARGET: {targetCol.toUpperCase()}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 60, height: 5, borderRadius: 3, background: C.faint, overflow: 'hidden', display: 'flex' }}>
+                  {balance?.entries?.slice(0, 4).map((e, i) => (
+                    <div key={e.value} style={{ width: `${e.pct}%`, height: '100%', background: PALETTE[i % PALETTE.length] }} />
+                  ))}
+                </div>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: balance?.level === 'Balanced' ? C.success : C.warning }}>
+                  {balance?.level}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+      {/* Redo — same concept/pattern as every other page's Redo action:
+          discard this step's own changes, restore the pre-step state. Red
+          styling communicates revert/reset, consistent with every other
+          Redo button across the app. */}
+      <button onClick={onRedo} style={{
+        padding: '9px 18px', borderRadius: 9, border: `1px solid ${C.danger}`,
+        background: C.dangerSoft, color: C.danger, fontWeight: 700, fontSize: 13,
+        cursor: 'pointer', flexShrink: 0,
+      }}>
+        ↺ Redo
+      </button>
     </div>
   )
 }
@@ -437,13 +400,62 @@ function StatusBar({ C, filename, health, missingPct, outlierTotal, dupCount, ta
 // ─────────────────────────────────────────────────────────────────────────────
 // CHART PRIMITIVES
 // ─────────────────────────────────────────────────────────────────────────────
-function computeHistBins(values, numBins = 20) {
+// Outlier-robust histogram binning. The old version spread a fixed 20 bins
+// evenly across the raw min..max — a handful of extreme values (or even one)
+// could stretch that range so far that every "normal" value landed in a
+// single bin, which is exactly the "one giant bar" distortion this replaces.
+// Every value is still counted (nothing is dropped or filtered out of the
+// underlying data) — values beyond the robust plotting range are simply
+// folded into the nearest edge bin, standard practice for a clipped
+// histogram, so the x-axis stays readable while the full sample size is
+// still represented.
+function computeHistBins(values) {
   if (!values.length) return []
-  const mn = Math.min(...values), mx = Math.max(...values)
-  if (mn === mx) return [{ mid: mn, count: values.length }]
-  const size = (mx - mn) / numBins
-  const bins = Array.from({ length: numBins }, (_, i) => ({ mid: mn + (i + 0.5) * size, count: 0 }))
-  values.forEach(v => { bins[Math.min(Math.floor((v - mn) / size), numBins - 1)].count++ })
+  const sorted = [...values].sort((a, b) => a - b)
+  const n = sorted.length
+  const dataMin = sorted[0], dataMax = sorted[n - 1]
+  if (dataMin === dataMax) return [{ mid: dataMin, count: n }]
+
+  const quantile = p => {
+    const idx = (n - 1) * p
+    const lo = Math.floor(idx), hi = Math.ceil(idx)
+    return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
+  }
+  const q1 = quantile(0.25), q3 = quantile(0.75)
+  const iqr = q3 - q1
+
+  // Robust plotting range: the tighter of the IQR fence (Q1-1.5*IQR to
+  // Q3+1.5*IQR) and the 1st/99th percentiles — whichever more tightly
+  // wraps the bulk of the data, without letting a long tail dominate.
+  let lo = dataMin, hi = dataMax
+  if (iqr > 0) {
+    lo = Math.max(dataMin, q1 - 1.5 * iqr)
+    hi = Math.min(dataMax, q3 + 1.5 * iqr)
+  }
+  lo = Math.max(lo, quantile(0.01))
+  hi = Math.min(hi, quantile(0.99))
+  if (hi <= lo) { lo = dataMin; hi = dataMax }   // degenerate guard (e.g. mostly-tied values)
+
+  // Bin count via the Freedman-Diaconis rule on the robust range, falling
+  // back to Sturges' rule when IQR is 0 (heavily discrete data) — clamped
+  // to a sane window so very small or very large samples still render
+  // something readable rather than 2 bars or 200.
+  let numBins
+  if (iqr > 0) {
+    const binWidth = 2 * iqr * Math.pow(n, -1 / 3)
+    numBins = binWidth > 0 ? Math.round((hi - lo) / binWidth) : 20
+  } else {
+    numBins = Math.round(Math.log2(n) + 1)
+  }
+  numBins = Math.max(8, Math.min(40, numBins || 20))
+
+  const size = (hi - lo) / numBins
+  const bins = Array.from({ length: numBins }, (_, i) => ({ mid: lo + (i + 0.5) * size, count: 0 }))
+  values.forEach(v => {
+    const clamped = Math.min(Math.max(v, lo), hi)
+    const idx = Math.max(0, Math.min(Math.floor((clamped - lo) / size), numBins - 1))
+    bins[idx].count++
+  })
   return bins
 }
 
@@ -830,9 +842,12 @@ function FeaturesCard({ C, columns, columnsInfo, removedColumns, selectedColumns
         <button onClick={onDeleteSelected} disabled={!hasSelection}
           title={hasSelection ? `Remove ${selectedColumns.join(', ')} from analysis` : 'Select a column first'}
           style={{
-            background: 'transparent', border: 'none', fontSize: 14, padding: '2px 4px', borderRadius: 6,
-            cursor: hasSelection ? 'pointer' : 'default', opacity: hasSelection ? 1 : 0.3,
-            color: hasSelection ? C.danger : C.muted,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: 28, height: 28, borderRadius: 8, fontSize: 13,
+            background: hasSelection ? C.dangerSoft : C.faint,
+            border: `1px solid ${hasSelection ? C.danger : C.border}`,
+            cursor: hasSelection ? 'pointer' : 'default', opacity: hasSelection ? 1 : 0.5,
+            color: hasSelection ? C.danger : C.muted, transition: 'all 0.15s',
           }}>🗑</button>
       </div>
       <div style={{ maxHeight: 195, overflowY: 'auto' }}>
@@ -1278,22 +1293,141 @@ function InlineLoader({ C, onFile, busy }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// REDO CONFIRMATION MODAL — same scrim/overlayCard visual pattern already
+// established on every other page (Sampling/Encoding/FeatureEngineering/
+// FeatureSelection all use this exact shape for their own Redo confirms).
+// ─────────────────────────────────────────────────────────────────────────────
+function RedoConfirmModal({ C, onCancel, onConfirm, working }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: C.scrim, backdropFilter: 'blur(4px)',
+      zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: C.overlayCard, border: `1px solid ${C.border}`, borderRadius: 16, padding: 30,
+        maxWidth: 420, width: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+        <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8, color: C.text }}>Redo Diagnose?</div>
+        <p style={{ fontSize: 13, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>
+          This discards every change made during this Diagnose step — cell edits, added rows, column
+          removals/renames — and restores the dataset to exactly the state it had when you first entered
+          this page. Versions created before Diagnose are not affected.
+        </p>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onCancel} style={{ padding: '9px 20px', borderRadius: 10, border: `1px solid ${C.border}`,
+            background: C.faint, color: C.text, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+          <button onClick={onConfirm} disabled={working} style={{ padding: '9px 20px', borderRadius: 10, border: 'none',
+            background: C.danger, color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+            {working ? 'Working…' : 'Yes, redo'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN DIAGNOSE PAGE
 // ─────────────────────────────────────────────────────────────────────────────
-export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
-  const [dark, setDark] = useState(false)
-  const C = dark ? DARK : LIGHT
+export default function DiagnosePage({ projectData, onNext, onUpdateData,
+  getInputPath, getDisplayPath, registerVersion, isStepDone, getVersion, resetStep, versions,
+  active, onNavigate, furthestOrder }) {
+  const { dark, C } = useTheme()
 
   const [filename, setFilename] = useState(projectData?.datasetFilename || projectData?.filename || null)
   const [columns, setColumns] = useState(projectData?.columns || null)
   const [rows, setRows] = useState(projectData?.rows || null)
   const [busy, setBusy] = useState(false)
 
+  // Defensive re-sync: `columns`/`rows` are normally seeded once, at first
+  // mount, from projectData (App.jsx passes the client-parsed Upload data
+  // straight through). If this component's very first render ever happens
+  // before that data has actually arrived — a mount-order edge case, not the
+  // common path — useState's "only used on first render" behavior would
+  // otherwise leave it locked on `null` forever, showing "no dataset loaded"
+  // even after projectData catches up on a later render. This closes that
+  // gap without affecting the normal case (once real data has been loaded,
+  // either from here or from a manual Browse, it's never overwritten).
+  useEffect(() => {
+    if (columns || rows) return
+    if (projectData?.columns?.length && projectData?.rows?.length) {
+      setColumns(projectData.columns)
+      setRows(projectData.rows)
+      setOriginalRows(projectData.rows.map(r => ({ ...r })))
+      setFilename(projectData.datasetFilename || projectData.filename || null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectData?.columns, projectData?.rows])
+
   const [removedColumns, setRemovedColumns] = useState(new Set())
   const [selectedColumns, setSelectedColumns] = useState([])
   const [dirtyCells, setDirtyCells] = useState(new Set())
   const [originalRows, setOriginalRows] = useState(null)
   const [showPairplot, setShowPairplot] = useState(false)
+
+  // ── Redo — a true, never-mutated snapshot of this dataset AS FIRST LOADED
+  // into Diagnose, captured once and reused by the Redo button below. This
+  // is deliberately a SEPARATE thing from `originalRows` above: `originalRows`
+  // is a dirty-cell-comparison baseline that renameColumn() intentionally
+  // keeps in sync with column renames (so `commitCell`'s "did this cell
+  // actually change" check stays correct) — it does NOT stay a pristine copy
+  // of the very first state. Captured lazily during render (not an effect)
+  // so it's ready the instant columns/rows first arrive, whichever of the
+  // two paths (projectData sync effect, or a manual loadFile()) got there
+  // first; loadFile() explicitly clears it first so re-Browsing a new file
+  // captures a fresh pristine snapshot for THAT file, not the previous one.
+  const pristineRef = useRef(null)
+  if (pristineRef.current === null && columns && rows) {
+    pristineRef.current = { columns: [...columns], rows: rows.map(r => ({ ...r })), filename }
+  }
+  const [redoModal, setRedoModal] = useState(false)
+  const [redoing, setRedoing] = useState(false)
+
+  // Set true the first time any of the 5 mutating actions below fires (cell
+  // edit, add row, delete column, rename column, or an issue-card fix).
+  // Gates the debounced auto-save effect further down — Diagnose shouldn't
+  // register a "Diagnose Edits" version just because the page was opened,
+  // only once the data has genuinely diverged from the original upload.
+  const [hasEdited, setHasEdited] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const saveTimerRef = useRef(null)
+
+  // The real, on-disk upstream file (the Django upload) — never Diagnose's
+  // own output. Used both as "Original Dataset" in the versions bar and as
+  // the base name every debounced save writes against (via the backend's
+  // suffix-stripping save_version, so repeated saves overwrite the SAME
+  // "_diagnose_edited.csv", never chain a new file per edit).
+  const originalFilePath = useMemo(() =>
+    (getInputPath ? getInputPath('diagnose') : null) || projectData?.filePath || null,
+  [getInputPath, projectData])
+
+  // Debounced auto-save: once the user has made a real edit, wait 800ms of
+  // quiet (mirrors Cleaning.jsx's own debounce-save convention for step
+  // settings) then persist the CURRENT edited dataset — physically dropping
+  // any column removed via the Features panel's trash icon, keeping cell
+  // edits/added rows/renames — as a real CSV via POST /diagnose/save, then
+  // register it as the 'diagnose' version. registerVersion's own semantics
+  // (cascade-delete any existing same-step version before registering) mean
+  // every one of these calls collapses to exactly ONE 'diagnose' version,
+  // continuously updated — never accumulating a new one per edit. If Django/
+  // FastAPI aren't reachable, editing still works locally; only the
+  // persisted version doesn't appear — same resilience principle used
+  // throughout this project.
+  useEffect(() => {
+    if (!hasEdited || !originalFilePath || !columns || !rows) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      setSaving(true)
+      try {
+        const keptColumns = columns.filter(c => !removedColumns.has(c))
+        const res = await callDiagnose('save', { file_path: originalFilePath, columns: keptColumns, rows })
+        if (registerVersion) {
+          await registerVersion('diagnose', res.new_file_path, 'Diagnose Edits', res.row_count,
+            { modified_cells: dirtyCells.size, removed_columns: [...removedColumns] })
+        }
+        if (onUpdateData) onUpdateData({ cleanedFilePath: res.new_file_path })
+      } catch { /* save/version round-trip failed — local editing is unaffected */ }
+      finally { setSaving(false) }
+    }, 800)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasEdited, rows, columns, removedColumns, originalFilePath])
 
   // App.jsx swaps Upload -> Diagnose in place (no real page navigation), so
   // the browser keeps whatever scroll position Upload was left at instead of
@@ -1305,12 +1439,37 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
     try {
       const text = await file.text()
       const parsed = parseCSV(text)
+      pristineRef.current = null   // re-Browsing a new file needs its own fresh pristine snapshot
       setColumns(parsed.columns)
       setRows(parsed.rows)
       setOriginalRows(parsed.rows.map(r => ({ ...r })))
       setFilename(file.name)
       setRemovedColumns(new Set()); setSelectedColumns([]); setDirtyCells(new Set())
+      setHasEdited(false)
     } finally { setBusy(false) }
+  }
+
+  // Discards every edit made during this Diagnose visit and restores the
+  // page to exactly the state it was in when the dataset first arrived —
+  // same concept as every other page's Redo (Encoding/Sampling/Feature
+  // Engineering/Feature Selection): really delete the registered 'diagnose'
+  // version server-side (resetStep, real Django cascade-delete), not just
+  // hide it client-side. Never touches versions from BEFORE this step.
+  const handleRedo = async () => {
+    setRedoing(true)
+    try {
+      if (resetStep) await resetStep('diagnose')
+      const pristine = pristineRef.current
+      if (pristine) {
+        setColumns([...pristine.columns])
+        setRows(pristine.rows.map(r => ({ ...r })))
+        setOriginalRows(pristine.rows.map(r => ({ ...r })))
+        setFilename(pristine.filename)
+      }
+      setRemovedColumns(new Set()); setSelectedColumns([]); setDirtyCells(new Set())
+      setHasEdited(false)
+      setRedoModal(false)
+    } finally { setRedoing(false) }
   }
 
   const columnsInfo = useMemo(() => {
@@ -1375,6 +1534,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
   })
 
   const commitCell = (rowIndex, col, value) => {
+    setHasEdited(true)
     setRows(prev => {
       const next = [...prev]
       const wasNumeric = columnsInfo[col]?.type === 'numerical'
@@ -1393,6 +1553,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
   }
 
   const addRow = () => {
+    setHasEdited(true)
     setRows(prev => [...prev, Object.fromEntries(columns.map(c => [c, null]))])
     setOriginalRows(prev => prev ? [...prev, Object.fromEntries(columns.map(c => [c, null]))] : prev)
   }
@@ -1412,12 +1573,14 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
       : `columns ${selectedColumns.join(', ')}`
     const ok = window.confirm(`Remove ${label} from analysis? This can be undone by re-adding it manually if you change your mind, but it won't reappear on its own.`)
     if (!ok) return
+    setHasEdited(true)
     setRemovedColumns(prev => new Set([...prev, ...selectedColumns]))
     setSelectedColumns([])
   }
 
   const renameColumn = (oldName, newName) => {
     if (columns.includes(newName)) return
+    setHasEdited(true)
     setColumns(prev => prev.map(c => c === oldName ? newName : c))
     setRows(prev => prev.map(r => {
       const { [oldName]: val, ...rest } = r
@@ -1438,6 +1601,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
   const applyColumnAction = (type, colOverride) => {
     const col = colOverride || selectedColumns[0]
     if (!col) return
+    setHasEdited(true)
     if (type === 'remove') { toggleRemoveColumn(col); return }
     setRows(prev => prev.map((r, ri) => {
       const v = r[col]
@@ -1454,7 +1618,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
   if (!rows || !columns) {
     return (
       <div style={{ minHeight: '100vh', background: C.bg, fontFamily: 'system-ui, sans-serif' }}>
-        <TopNav C={C} dark={dark} onToggleTheme={() => setDark(d => !d)} />
+        <TopNav active={active || 'diagnose'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
         <InlineLoader C={C} onFile={loadFile} busy={busy} />
       </div>
     )
@@ -1469,14 +1633,34 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData }) {
   // it just blends into the white card instead of standing out).
   const focusRingColor = C === DARK ? C.primary : '#ffffff'
 
+  // Native text selection (::selection) is unstyled by default, so browsers
+  // paint it with their own light OS/theme default — that's what shows as a
+  // stray light box hugging selected text in Data Preview and Features when
+  // the page is in dark mode (there's no custom "selected cell" class doing
+  // this; it's the browser's own selection highlight). Tint it with the
+  // theme's own accent color instead, background only — text color is left
+  // untouched on purpose.
+  const selectionBg = `${C.primary}4D`
+
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
+    <div className="diagnose-page" style={{ minHeight: '100vh', background: C.bg, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
       <style>{`
         .diag-focus-fix input:focus-visible { outline: 2px solid ${focusRingColor}; outline-offset: 2px; }
+        .diagnose-page ::selection { background-color: ${selectionBg}; }
       `}</style>
-      <TopNav C={C} dark={dark} onToggleTheme={() => setDark(d => !d)} />
+      <TopNav active={active || 'diagnose'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
       <StatusBar C={C} filename={filename || 'dataset.csv'} health={health} missingPct={missingPct}
-        outlierTotal={outlierTotal} dupCount={dupCount} targetCol={targetCol} balance={balance} />
+        outlierTotal={outlierTotal} dupCount={dupCount} targetCol={targetCol} balance={balance}
+        onRedo={() => setRedoModal(true)} />
+      {redoModal && (
+        <RedoConfirmModal C={C} onCancel={() => setRedoModal(false)} onConfirm={handleRedo} working={redoing} />
+      )}
+      <SharedVersionsBar versions={versions} />
+      {saving && (
+        <div style={{ padding: '4px 24px', fontSize: 11, color: C.muted, fontStyle: 'italic', background: C.cardAlt }}>
+          saving edits…
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 20, padding: 24, alignItems: 'flex-start' }}>
         <div style={{ width: '40%', minWidth: 340, display: 'flex', flexDirection: 'column', gap: 20 }}>

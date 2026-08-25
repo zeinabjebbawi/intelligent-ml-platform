@@ -110,83 +110,93 @@ class RowThresholdReq(BaseModel):
 
 @router.post("/profile-duplicates")
 def profile_duplicates(req: FileReq):
-    df = read_df(req.file_path)
+    try:
+        df = read_df(req.file_path)
 
-    # ── Identify duplicates and assign group IDs ──────────────────────────
-    dup_mask_all   = df.duplicated(keep=False)   # all rows in any dup group
-    dup_mask_first = df.duplicated(keep='first') # rows that are actual duplicates (non-first)
+        # ── Identify duplicates and assign group IDs ──────────────────────────
+        dup_mask_all   = df.duplicated(keep=False)   # all rows in any dup group
+        dup_mask_first = df.duplicated(keep='first') # rows that are actual duplicates (non-first)
 
-    # Build row_hash → group_label mapping
-    group_map   = {}   # hash → "g1", "g2", …
-    group_count = 0
-    row_hashes  = []
+        # Build row_hash → group_label mapping
+        group_map   = {}   # hash → "g1", "g2", …
+        group_count = 0
+        row_hashes  = []
 
-    for idx in range(len(df)):
-        if dup_mask_all.iloc[idx]:
-            # Hash the row values (stable, order-sensitive)
-            row_bytes = str(df.iloc[idx].tolist()).encode()
-            h = hashlib.md5(row_bytes).hexdigest()
-            row_hashes.append(h)
-            if h not in group_map:
-                group_count += 1
-                group_map[h] = f"g{group_count}"
-        else:
-            row_hashes.append(None)
+        for idx in range(len(df)):
+            if dup_mask_all.iloc[idx]:
+                # Hash the row values (stable, order-sensitive)
+                row_bytes = str(df.iloc[idx].tolist()).encode()
+                h = hashlib.md5(row_bytes).hexdigest()
+                row_hashes.append(h)
+                if h not in group_map:
+                    group_count += 1
+                    group_map[h] = f"g{group_count}"
+            else:
+                row_hashes.append(None)
 
-    # Counts
-    total_dup_rows  = int(dup_mask_all.sum())   # all rows touched by duplication
-    real_duplicates = int(dup_mask_first.sum())  # actual extras to be removed
-    total_groups    = group_count
+        # Counts
+        total_dup_rows  = int(dup_mask_all.sum())   # all rows touched by duplication
+        real_duplicates = int(dup_mask_first.sum())  # actual extras to be removed
+        total_groups    = group_count
 
-    # Build display rows (cap at 2000 for performance)
-    display_df = df.head(2000).copy()
-    rows = []
-    # Track which row is the first occurrence of its group
-    first_seen = set()
+        # Build display rows (cap at 2000 for performance)
+        display_df = df.head(2000).copy()
+        rows = []
+        # Track which row is the first occurrence of its group
+        first_seen = set()
 
-    for i in range(len(display_df)):
-        # Real datasets almost always have missing values, which pandas
-        # represents as NaN. Python's json encoder rejects raw NaN, so
-        # round-trip each row's dict through a per-value native-type cast
-        # instead of using DataFrame.to_dict() directly on the whole block.
-        row_dict = json.loads(display_df.iloc[[i]].to_json(orient='records'))[0]
-        h = row_hashes[i]
-        is_dup    = bool(dup_mask_all.iloc[i])
-        group_id  = group_map.get(h) if h else None
-        is_first  = False
+        for i in range(len(display_df)):
+            # Real datasets almost always have missing values, which pandas
+            # represents as NaN. Python's json encoder rejects raw NaN, so
+            # round-trip each row's dict through a per-value native-type cast
+            # instead of using DataFrame.to_dict() directly on the whole block.
+            row_dict = json.loads(display_df.iloc[[i]].to_json(orient='records'))[0]
+            h = row_hashes[i]
+            is_dup    = bool(dup_mask_all.iloc[i])
+            group_id  = group_map.get(h) if h else None
+            is_first  = False
 
-        if is_dup and group_id:
-            is_first = group_id not in first_seen
-            first_seen.add(group_id)
+            if is_dup and group_id:
+                is_first = group_id not in first_seen
+                first_seen.add(group_id)
 
-        row_dict['_dup_group']         = group_id        # e.g. "g1" or None
-        row_dict['_is_dup']            = is_dup
-        row_dict['_is_first_in_group'] = is_first        # True = kept row
+            row_dict['_dup_group']         = group_id        # e.g. "g1" or None
+            row_dict['_is_dup']            = is_dup
+            row_dict['_is_first_in_group'] = is_first        # True = kept row
 
-        rows.append(row_dict)
+            rows.append(row_dict)
 
-    return {
-        "total_dup_rows":  total_dup_rows,   # all rows involved (for DUPLICATE ROWS card)
-        "total_groups":    total_groups,      # unique groups (for DUPLICATE GROUPS card)
-        "real_duplicates": real_duplicates,   # rows that will be removed
-        "total_rows":      len(df),
-        "columns":         list(df.columns),
-        "rows":            rows,
-    }
+        return {
+            "total_dup_rows":  total_dup_rows,   # all rows involved (for DUPLICATE ROWS card)
+            "total_groups":    total_groups,      # unique groups (for DUPLICATE GROUPS card)
+            "real_duplicates": real_duplicates,   # rows that will be removed
+            "total_rows":      len(df),
+            "columns":         list(df.columns),
+            "rows":            rows,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profiling duplicates failed: {str(e)}")
 
 
 @router.post("/remove-duplicates")
 def remove_duplicates(req: FileReq):
-    df = read_df(req.file_path)
-    before  = len(df)
-    cleaned = df.drop_duplicates().reset_index(drop=True)
-    new_path = save_version(cleaned, req.file_path, "dup_removed")
-    return {
-        "rows_removed":  before - len(cleaned),
-        "new_row_count": len(cleaned),
-        "new_file_path": new_path,
-        "version_name":  "Duplicate Removed",
-    }
+    try:
+        df = read_df(req.file_path)
+        before  = len(df)
+        cleaned = df.drop_duplicates().reset_index(drop=True)
+        new_path = save_version(cleaned, req.file_path, "dup_removed")
+        return {
+            "rows_removed":  before - len(cleaned),
+            "new_row_count": len(cleaned),
+            "new_file_path": new_path,
+            "version_name":  "Duplicate Removed",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Removing duplicates failed: {str(e)}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OUTLIERS — GLOBAL
@@ -194,68 +204,123 @@ def remove_duplicates(req: FileReq):
 
 @router.post("/profile-outliers-global")
 def profile_outliers_global(req: FileReq):
-    df = read_df(req.file_path)
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if not num_cols:
-        return {"total_outliers": 0, "column_summary": [],
-                "pca_scatter": [], "outlier_index_plot": []}
+    try:
+        df = read_df(req.file_path)
+        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if not num_cols:
+            return {"total_outliers": 0, "column_summary": [],
+                    "pca_scatter": [], "outlier_index_plot": []}
 
-    col_summary = []
-    total_outliers = 0
-    for col in num_cols:
-        s = df[col].dropna()
-        is_normal, pval, _ = check_normality(s)
-        method = 'zscore' if is_normal else 'iqr'
-        bs = base_stats(s)
-        if method == 'zscore':
-            n_out = int((np.abs((s - bs['mean']) / max(bs['std'], 1e-10)) > 3.0).sum())
-        else:
-            n_out = int(((s > bs['iqr_upper']) | (s < bs['iqr_lower'])).sum())
-        total_outliers += n_out
-        col_summary.append({
-            "column": col, "n_outliers": n_out,
-            "method": method, "is_normal": is_normal, "p_value": round(pval, 4),
-        })
+        col_summary = []
+        total_outliers = 0
+        for col in num_cols:
+            s = df[col].dropna()
+            is_normal, pval, _ = check_normality(s)
+            method = 'zscore' if is_normal else 'iqr'
+            bs = base_stats(s)
+            if method == 'zscore':
+                n_out = int((np.abs((s - bs['mean']) / max(bs['std'], 1e-10)) > 3.0).sum())
+            else:
+                n_out = int(((s > bs['iqr_upper']) | (s < bs['iqr_lower'])).sum())
+            total_outliers += n_out
+            col_summary.append({
+                "column": col, "n_outliers": n_out,
+                "method": method, "is_normal": is_normal, "p_value": round(pval, 4),
+            })
 
-    X_full = df[num_cols].fillna(df[num_cols].median())
-    n = min(600, len(X_full))
-    sample_idx = np.random.choice(len(X_full), n, replace=False)
-    Xs = X_full.iloc[sample_idx]
-    scaler = StandardScaler()
-    Xs_scaled = scaler.fit_transform(Xs)
+        X_full = df[num_cols].fillna(df[num_cols].median())
+        n = min(600, len(X_full))
+        sample_idx = np.random.choice(len(X_full), n, replace=False)
+        Xs = X_full.iloc[sample_idx]
+        scaler = StandardScaler()
+        Xs_scaled = scaler.fit_transform(Xs)
 
-    iso = IsolationForest(contamination='auto', random_state=42)
-    iso_labels = iso.fit_predict(Xs_scaled)
-    iso_scores = iso.decision_function(Xs_scaled)
+        iso = IsolationForest(contamination='auto', random_state=42)
+        iso_labels = iso.fit_predict(Xs_scaled)
+        iso_scores = iso.decision_function(Xs_scaled)
 
-    pca = PCA(n_components=min(2, len(num_cols)))
-    X_pca = pca.fit_transform(Xs_scaled)
+        pca = PCA(n_components=min(2, len(num_cols)))
+        X_pca = pca.fit_transform(Xs_scaled)
 
-    pca_scatter = [
-        {"x": float(X_pca[i, 0]), "y": float(X_pca[i, 1]),
-         "is_outlier": bool(iso_labels[i] == -1),
-         "row_index": int(sample_idx[i])}
-        for i in range(n)
-    ]
+        pca_scatter = [
+            {"x": float(X_pca[i, 0]), "y": float(X_pca[i, 1]),
+             "is_outlier": bool(iso_labels[i] == -1),
+             "row_index": int(sample_idx[i])}
+            for i in range(n)
+        ]
 
-    s_min, s_max = iso_scores.min(), iso_scores.max()
-    norm_scores = 1 - (iso_scores - s_min) / (s_max - s_min + 1e-10)
-    outlier_index_plot = [
-        {"index": int(sample_idx[i]),
-         "score": float(norm_scores[i]),
-         "is_outlier": bool(iso_labels[i] == -1)}
-        for i in range(n)
-    ]
+        s_min, s_max = iso_scores.min(), iso_scores.max()
+        norm_scores = 1 - (iso_scores - s_min) / (s_max - s_min + 1e-10)
+        outlier_index_plot = [
+            {"index": int(sample_idx[i]),
+             "score": float(norm_scores[i]),
+             "is_outlier": bool(iso_labels[i] == -1)}
+            for i in range(n)
+        ]
 
-    return {
-        "total_outliers": total_outliers,
-        "n_zscore_cols": sum(1 for c in col_summary if c['method'] == 'zscore'),
-        "n_iqr_cols":    sum(1 for c in col_summary if c['method'] == 'iqr'),
-        "column_summary": col_summary,
-        "pca_scatter": pca_scatter,
-        "outlier_index_plot": outlier_index_plot,
-        "pca_variance": [float(v) for v in pca.explained_variance_ratio_],
-    }
+        return {
+            "total_outliers": total_outliers,
+            "n_zscore_cols": sum(1 for c in col_summary if c['method'] == 'zscore'),
+            "n_iqr_cols":    sum(1 for c in col_summary if c['method'] == 'iqr'),
+            "column_summary": col_summary,
+            "pca_scatter": pca_scatter,
+            "outlier_index_plot": outlier_index_plot,
+            "pca_variance": [float(v) for v in pca.explained_variance_ratio_],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profiling outliers failed: {str(e)}")
+
+
+@router.post("/get-all-outlier-indices")
+def get_all_outlier_indices(req: FileReq):
+    """
+    Returns every outlier row index across every numeric column, computed
+    in one pass against the ORIGINAL file — each column's suggested method
+    at its default threshold (zscore=3.0 for normal columns, IQR mult=1.5
+    for skewed), matching profile-outliers-global's own fixed defaults.
+
+    Backs the "Remove All Outliers" button: computing every column's
+    outliers against the same untouched file (rather than removing column
+    by column and re-profiling the next column against an already-shrunk
+    file) avoids one column's removal shifting another's mean/std/Q1/Q3
+    mid-pass, which previously let outliers re-emerge in already-processed
+    columns with no re-check.
+    """
+    try:
+        df = read_df(req.file_path)
+        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+        all_outlier_indices = set()
+        col_counts = {}
+
+        for col in num_cols:
+            series = df[col].dropna()
+            if len(series) < 8:
+                continue
+            is_normal, _, _ = check_normality(series)
+            bs = base_stats(series)
+
+            if is_normal:
+                mask = df[col].notna() & (np.abs((df[col] - bs['mean']) / max(bs['std'], 1e-10)) > 3.0)
+            else:
+                mask = df[col].notna() & ((df[col] > bs['iqr_upper']) | (df[col] < bs['iqr_lower']))
+
+            col_indices = df.index[mask].tolist()
+            col_counts[col] = len(col_indices)
+            all_outlier_indices.update(col_indices)
+
+        return {
+            "outlier_indices":    [int(i) for i in sorted(all_outlier_indices)],
+            "total_outlier_rows": len(all_outlier_indices),
+            "total_rows":         len(df),
+            "per_column_counts":  col_counts,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Computing outlier indices failed: {str(e)}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OUTLIERS — PER COLUMN
@@ -263,66 +328,76 @@ def profile_outliers_global(req: FileReq):
 
 @router.post("/profile-outliers-column")
 def profile_outliers_column(req: ColumnReq):
-    df = read_df(req.file_path)
-    if req.column not in df.columns:
-        raise HTTPException(400, f"Column '{req.column}' not found")
+    try:
+        df = read_df(req.file_path)
+        if req.column not in df.columns:
+            raise HTTPException(400, f"Column '{req.column}' not found")
 
-    series  = df[req.column].dropna()
-    is_normal, pval, test_name = check_normality(series)
-    suggested = 'zscore' if is_normal else 'iqr'
-    bs = base_stats(series)
+        series  = df[req.column].dropna()
+        is_normal, pval, test_name = check_normality(series)
+        suggested = 'zscore' if is_normal else 'iqr'
+        bs = base_stats(series)
 
-    arr = series.values
-    if suggested == 'zscore':
-        out_mask = np.abs((arr - bs['mean']) / max(bs['std'], 1e-10)) > 3.0
-    else:
-        out_mask = (arr > bs['iqr_upper']) | (arr < bs['iqr_lower'])
+        arr = series.values
+        if suggested == 'zscore':
+            out_mask = np.abs((arr - bs['mean']) / max(bs['std'], 1e-10)) > 3.0
+        else:
+            out_mask = (arr > bs['iqr_upper']) | (arr < bs['iqr_lower'])
 
-    all_indices = series.index.tolist()
-    out_idx  = [all_indices[i] for i in range(len(arr)) if out_mask[i]]
-    norm_idx = [all_indices[i] for i in range(len(arr)) if not out_mask[i]]
-    if len(norm_idx) > 1500:
-        rng = np.random.default_rng(42)
-        norm_idx = rng.choice(norm_idx, 1500, replace=False).tolist()
+        all_indices = series.index.tolist()
+        out_idx  = [all_indices[i] for i in range(len(arr)) if out_mask[i]]
+        norm_idx = [all_indices[i] for i in range(len(arr)) if not out_mask[i]]
+        if len(norm_idx) > 1500:
+            rng = np.random.default_rng(42)
+            norm_idx = rng.choice(norm_idx, 1500, replace=False).tolist()
 
-    all_values = [
-        {"row_index": int(i), "value": float(df.loc[i, req.column])}
-        for i in (out_idx + norm_idx) if pd.notna(df.loc[i, req.column])
-    ]
+        all_values = [
+            {"row_index": int(i), "value": float(df.loc[i, req.column])}
+            for i in (out_idx + norm_idx) if pd.notna(df.loc[i, req.column])
+        ]
 
-    counts, edges = np.histogram(arr, bins=min(40, max(10, len(arr) // 20)))
-    histogram = {
-        "counts":   counts.tolist(),
-        "bin_edges": [float(e) for e in edges],
-        "bin_mids":  [float((edges[i] + edges[i+1]) / 2) for i in range(len(counts))],
-    }
+        counts, edges = np.histogram(arr, bins=min(40, max(10, len(arr) // 20)))
+        histogram = {
+            "counts":   counts.tolist(),
+            "bin_edges": [float(e) for e in edges],
+            "bin_mids":  [float((edges[i] + edges[i+1]) / 2) for i in range(len(counts))],
+        }
 
-    return {
-        "column":           req.column,
-        "is_normal":        is_normal,
-        "suggested_method": suggested,
-        "p_value":          round(pval, 4),
-        "test_name":        test_name,
-        "stats":            bs,
-        "all_values":       all_values,
-        "histogram":        histogram,
-        "total_values":     len(series),
-        "missing_count":    int(df[req.column].isna().sum()),
-    }
+        return {
+            "column":           req.column,
+            "is_normal":        is_normal,
+            "suggested_method": suggested,
+            "p_value":          round(pval, 4),
+            "test_name":        test_name,
+            "stats":            bs,
+            "all_values":       all_values,
+            "histogram":        histogram,
+            "total_values":     len(series),
+            "missing_count":    int(df[req.column].isna().sum()),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profiling column failed: {str(e)}")
 
 
 @router.post("/remove-outliers")
 def remove_outliers_endpoint(req: RemoveOutliersReq):
-    df = read_df(req.file_path)
-    before  = len(df)
-    cleaned = df.drop(index=req.rows_to_remove, errors='ignore').reset_index(drop=True)
-    new_path = save_version(cleaned, req.file_path, "outliers_removed")
-    return {
-        "rows_removed":  before - len(cleaned),
-        "new_row_count": len(cleaned),
-        "new_file_path": new_path,
-        "version_name":  "Outliers Removed",
-    }
+    try:
+        df = read_df(req.file_path)
+        before  = len(df)
+        cleaned = df.drop(index=req.rows_to_remove, errors='ignore').reset_index(drop=True)
+        new_path = save_version(cleaned, req.file_path, "outliers_removed")
+        return {
+            "rows_removed":  before - len(cleaned),
+            "new_row_count": len(cleaned),
+            "new_file_path": new_path,
+            "version_name":  "Outliers Removed",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Removing outliers failed: {str(e)}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MISSING VALUES
@@ -330,114 +405,160 @@ def remove_outliers_endpoint(req: RemoveOutliersReq):
 
 @router.post("/profile-missing-global")
 def profile_missing_global(req: FileReq):
-    df = read_df(req.file_path)
+    try:
+        df = read_df(req.file_path)
 
-    bar_data = []
-    for col in df.columns:
-        total   = len(df)
-        missing = int(df[col].isna().sum())
-        present = total - missing
-        col_type = 'numerical' if pd.api.types.is_numeric_dtype(df[col]) else 'categorical'
-        bar_data.append({
-            "column":      col,
-            "present":     present,
-            "missing":     missing,
-            "present_pct": round(present / total, 4),
-            "missing_pct": round(missing / total * 100, 2),
-            "type":        col_type,
-        })
+        # total==0 is a real, reachable case — e.g. after a row-threshold drop
+        # (or any other upstream step) removes every row from the dataset. This
+        # loop's present/missing percentages were the one place in this endpoint
+        # that divided by `total` unguarded (the other two percentage fields
+        # further below already guard against it) — for an empty dataframe this
+        # raised an unhandled ZeroDivisionError, which is the exact root cause of
+        # a "Failed to fetch" on the very next profile refetch: an unhandled
+        # exception here escapes to Starlette's ServerErrorMiddleware, which
+        # sits outside CORSMiddleware, so its response carries no CORS headers
+        # and the browser reports a bare, undebuggable "Failed to fetch".
+        bar_data = []
+        total = len(df)
+        for col in df.columns:
+            missing = int(df[col].isna().sum())
+            present = total - missing
+            col_type = 'numerical' if pd.api.types.is_numeric_dtype(df[col]) else 'categorical'
+            bar_data.append({
+                "column":      col,
+                "present":     present,
+                "missing":     missing,
+                "present_pct": round(present / total, 4) if total else 0,
+                "missing_pct": round(missing / total * 100, 2) if total else 0,
+                "type":        col_type,
+            })
 
-    sample_n  = min(250, len(df))
-    sample_df = df.sample(sample_n, random_state=42).sort_index() if len(df) > sample_n else df
-    matrix_rows = (~sample_df.isnull()).values.tolist()
+        sample_n  = min(250, len(df))
+        sample_df = df.sample(sample_n, random_state=42).sort_index() if len(df) > sample_n else df
+        matrix_rows = (~sample_df.isnull()).values.tolist()
 
-    row_miss = df.isnull().sum(axis=1)
-    completeness = [
-        {"missing_per_row": int(k), "row_count": int(v)}
-        for k, v in row_miss.value_counts().sort_index().items()
-    ]
+        row_miss = df.isnull().sum(axis=1)
+        completeness = [
+            {"missing_per_row": int(k), "row_count": int(v)}
+            for k, v in row_miss.value_counts().sort_index().items()
+        ]
 
-    total_missing = int(df.isnull().sum().sum())
-    total_cells   = df.shape[0] * df.shape[1]
-    complete_rows = int((row_miss == 0).sum())
+        total_missing = int(df.isnull().sum().sum())
+        total_cells   = df.shape[0] * df.shape[1]
+        complete_rows = int((row_miss == 0).sum())
 
-    return {
-        "bar_data": bar_data,
-        "matrix_data": {
-            "columns":    list(df.columns),
-            "rows":       matrix_rows,
-            "total_rows": len(df),
-            "sample_rows": sample_n,
-        },
-        "row_completeness":  completeness,
-        "total_missing":     total_missing,
-        "missing_pct":       round(total_missing / total_cells * 100, 2) if total_cells else 0,
-        "complete_rows":     complete_rows,
-        "complete_rows_pct": round(complete_rows / len(df) * 100, 1) if len(df) else 0,
-        "cols_with_missing": sum(1 for b in bar_data if b['missing'] > 0),
-        "total_rows":        len(df),
-        "total_cols":        len(df.columns),
-    }
+        return {
+            "bar_data": bar_data,
+            "matrix_data": {
+                "columns":    list(df.columns),
+                "rows":       matrix_rows,
+                "total_rows": len(df),
+                "sample_rows": sample_n,
+            },
+            "row_completeness":  completeness,
+            "total_missing":     total_missing,
+            "missing_pct":       round(total_missing / total_cells * 100, 2) if total_cells else 0,
+            "complete_rows":     complete_rows,
+            "complete_rows_pct": round(complete_rows / len(df) * 100, 1) if len(df) else 0,
+            "cols_with_missing": sum(1 for b in bar_data if b['missing'] > 0),
+            "total_rows":        len(df),
+            "total_cols":        len(df.columns),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profiling missing values failed: {str(e)}")
 
 
 @router.post("/apply-row-threshold")
 def apply_row_threshold(req: RowThresholdReq):
-    df = read_df(req.file_path)
-    before  = len(df)
-    cleaned = df.dropna(thresh=req.min_present).reset_index(drop=True)
-    new_path = save_version(cleaned, req.file_path, "rows_filtered")
-    return {
-        "rows_removed":  before - len(cleaned),
-        "new_row_count": len(cleaned),
-        "new_file_path": new_path,
-        "version_name":  "Incomplete Rows Dropped",
-    }
+    try:
+        df = read_df(req.file_path)
+        before  = len(df)
+        cleaned = df.dropna(thresh=req.min_present).reset_index(drop=True)
+        new_path = save_version(cleaned, req.file_path, "rows_filtered")
+        return {
+            "rows_removed":  before - len(cleaned),
+            "new_row_count": len(cleaned),
+            "new_file_path": new_path,
+            "version_name":  "Incomplete Rows Dropped",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Applying row threshold failed: {str(e)}")
 
 
 @router.post("/apply-missing-column")
 def apply_missing_column(req: ApplyMissingReq):
-    df = read_df(req.file_path)
-    if req.column not in df.columns:
-        raise HTTPException(400, f"Column '{req.column}' not found")
+    try:
+        df = read_df(req.file_path)
+        if req.column not in df.columns:
+            raise HTTPException(400, f"Column '{req.column}' not found")
 
-    before   = int(df[req.column].isna().sum())
-    col_type = 'numerical' if pd.api.types.is_numeric_dtype(df[req.column]) else 'categorical'
+        before   = int(df[req.column].isna().sum())
+        col_type = 'numerical' if pd.api.types.is_numeric_dtype(df[req.column]) else 'categorical'
 
-    if req.method == 'drop_column':
-        df = df.drop(columns=[req.column])
-    elif req.method == 'drop_rows':
-        df = df.dropna(subset=[req.column]).reset_index(drop=True)
-    elif req.method == 'mean':
-        if col_type != 'numerical':
-            raise HTTPException(400, "Mean imputation requires a numerical column")
-        df[req.column] = df[req.column].fillna(df[req.column].mean())
-    elif req.method == 'mode':
-        df[req.column] = df[req.column].fillna(df[req.column].mode().iloc[0])
-    elif req.method == 'knn':
-        if col_type != 'numerical':
-            raise HTTPException(400, "KNN imputation requires a numerical column")
-        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        imputer  = KNNImputer(n_neighbors=req.n_neighbors)
-        df[num_cols] = imputer.fit_transform(df[num_cols])
-    elif req.method == 'interpolation':
-        df[req.column] = df[req.column].interpolate(method='linear')
-    else:
-        raise HTTPException(400, f"Unknown method: {req.method}")
+        if req.method == 'drop_column':
+            df = df.drop(columns=[req.column])
+        elif req.method == 'drop_rows':
+            df = df.dropna(subset=[req.column]).reset_index(drop=True)
+        elif req.method == 'mean':
+            if col_type != 'numerical':
+                raise HTTPException(400, "Mean imputation requires a numerical column")
+            df[req.column] = df[req.column].fillna(df[req.column].mean())
+        elif req.method == 'mode':
+            df[req.column] = df[req.column].fillna(df[req.column].mode().iloc[0])
+        elif req.method == 'knn':
+            if col_type != 'numerical':
+                raise HTTPException(400, "KNN imputation requires a numerical column")
+            # KNNImputer inherently needs OTHER numeric columns as context to
+            # find similar rows and estimate a plausible value — but it was
+            # writing its full fit_transform() output back across every
+            # numeric column in df[num_cols], not just req.column. Since
+            # KNNImputer also fills in any missing values it happens to see
+            # in those other columns as a side effect of imputing them all
+            # together, calling this for ONE column was silently imputing
+            # every numeric column in the dataset. This is the exact root
+            # cause of "apply to one column fills the whole dataset, and
+            # every column's graph shows zero missing" — the saved file
+            # really did have every numeric column filled, not just the
+            # requested one. Fixed: still fit/transform across every numeric
+            # column (that's what makes KNN's estimate meaningful), but only
+            # write the result back for the column actually requested.
+            num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            imputer  = KNNImputer(n_neighbors=req.n_neighbors)
+            imputed  = imputer.fit_transform(df[num_cols])
+            imputed_df = pd.DataFrame(imputed, columns=num_cols, index=df.index)
+            df[req.column] = imputed_df[req.column]
+        elif req.method == 'interpolation':
+            df[req.column] = df[req.column].interpolate(method='linear')
+        else:
+            raise HTTPException(400, f"Unknown method: {req.method}")
 
-    after    = int(df[req.column].isna().sum()) if req.method != 'drop_column' else 0
-    new_path = save_version(df, req.file_path, "missing_imputed")
-    return {
-        "column":         req.column,
-        "method":         req.method,
-        "before_missing": before,
-        "after_missing":  after,
-        "new_file_path":  new_path,
-        "version_name":   "Missing Values Imputed",
-    }
+        after    = int(df[req.column].isna().sum()) if req.method != 'drop_column' else 0
+        new_path = save_version(df, req.file_path, "missing_imputed")
+        return {
+            "column":         req.column,
+            "method":         req.method,
+            "before_missing": before,
+            "after_missing":  after,
+            "new_file_path":  new_path,
+            "version_name":   "Missing Values Imputed",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Applying imputation failed: {str(e)}")
 
 
 @router.get("/download")
 def download_file(file_path: str, filename: str = "dataset.csv"):
-    if not os.path.exists(file_path):
-        raise HTTPException(404, f"File not found: {file_path}")
-    return FileResponse(path=file_path, filename=filename, media_type="text/csv")
+    try:
+        if not os.path.exists(file_path):
+            raise HTTPException(404, f"File not found: {file_path}")
+        return FileResponse(path=file_path, filename=filename, media_type="text/csv")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")

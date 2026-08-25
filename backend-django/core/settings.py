@@ -67,7 +67,12 @@ MIDDLEWARE = [
 # middleware has a chance to reject or redirect the request.
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',   # React (Vite dev server)
+    'http://127.0.0.1:5173',   # same, but via the IPv4 literal — see FastAPI's
+                                # main.py CORS comment: on a dual-stack machine
+                                # "localhost" can resolve to ::1 as well as
+                                # 127.0.0.1, so both origins are kept allowed.
     'http://localhost:3000',   # React, if ever run on the CRA-style port instead
+    'http://127.0.0.1:3000',
 ]
 
 ROOT_URLCONF = 'core.urls'

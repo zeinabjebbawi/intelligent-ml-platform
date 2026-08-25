@@ -6,14 +6,22 @@
 import axios from 'axios'
 
 // Django API (auth, upload, projects, database)
+//
+// Uses the 127.0.0.1 literal rather than "localhost": on a dual-stack
+// machine "localhost" can resolve to ::1 (IPv6) as well as 127.0.0.1
+// (IPv4), and both Django and FastAPI here only bind IPv4. If a browser's
+// fetch happens to resolve "localhost" to ::1 first, the connection fails
+// before any HTTP/CORS handling even runs, surfacing as a bare "Failed to
+// fetch" with no further detail. Using the literal IPv4 address sidesteps
+// the ambiguity entirely.
 export const djangoAPI = axios.create({
-  baseURL: 'http://localhost:8080',
+  baseURL: 'http://127.0.0.1:8080',
   headers: { 'Content-Type': 'application/json' },
 })
 
 // FastAPI ML engine (profiling, training, what-if)
 export const mlAPI = axios.create({
-  baseURL: 'http://localhost:8001',
+  baseURL: 'http://127.0.0.1:8001',
   headers: { 'Content-Type': 'application/json' },
 })
 

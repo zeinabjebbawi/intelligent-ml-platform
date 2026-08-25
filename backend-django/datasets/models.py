@@ -14,11 +14,13 @@ STEP_ORDER = {
     'cleaning_outliers':   4,
     'cleaning_missing':    5,
     'encoding':            6,
-    'sampling':            7,
-    'feature_selection':   8,
-    'training':            9,
-    'feature_impact':      10,
-    'report':              11,
+    'feature_engineering': 7,
+    'sampling':            8,
+    'data_readiness':      9,
+    'feature_selection':   10,
+    'training':            11,
+    'feature_impact':      12,
+    'report':              13,
 }
 
 
