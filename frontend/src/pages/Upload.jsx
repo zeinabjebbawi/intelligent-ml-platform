@@ -817,11 +817,12 @@ function StepIndicator({ step, C }) {
 
 function ChoiceCard({ icon, title, subtitle, tag, selected, onClick, C }) {
   return (
-    <div onClick={onClick}
+    <div onClick={onClick} className="prism-choice-card"
       style={{
         position: 'relative', border: `1.5px solid ${selected ? C.primary : C.border}`,
         background: selected ? C.primarySoft : C.card, borderRadius: 14,
         padding: '18px 20px', cursor: 'pointer', transition: 'all 0.15s',
+        boxShadow: selected ? `0 0 0 3px ${C.primary}22` : shadow2,
       }}>
       {selected && (
         <span style={{
@@ -904,6 +905,11 @@ function DatasetSetupDrawer({
     }}>
       <style>{`
         @keyframes stepIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+        /* Hover polish to match the card feel already established in
+           Encoding.jsx/FeatureEngineering.jsx — purely visual (CSS-only,
+           no state), doesn't touch any selection logic below. */
+        .prism-choice-card:hover { border-color: ${C.primary} !important; transform: translateY(-1px); }
+        .prism-target-row:hover { background: ${C.faint} !important; }
       `}</style>
 
       <div style={{
@@ -951,17 +957,18 @@ function DatasetSetupDrawer({
                 Choose a column — we'll detect the task type automatically.
               </p>
 
-              <div style={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              <div style={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${C.border}`,
+                borderRadius: 12, boxShadow: shadow2 }}>
                 {columns.map(col => {
                   const info = columnsInfo[col]
                   const selected = selectedTarget === col
                   return (
-                    <div key={col} onClick={() => pickTarget(col)}
+                    <div key={col} onClick={() => pickTarget(col)} className="prism-target-row"
                       style={{
                         display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', cursor: 'pointer',
                         background: selected ? C.primarySoft : 'transparent',
                         borderLeft: selected ? `3px solid ${C.primary}` : '3px solid transparent',
-                        borderBottom: `1px solid ${C.border}`,
+                        borderBottom: `1px solid ${C.border}`, transition: 'background 0.1s',
                       }}>
                       <span style={{ fontSize: 14, color: selected ? C.primary : C.muted }}>{selected ? '●' : '○'}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -978,7 +985,8 @@ function DatasetSetupDrawer({
               </div>
 
               {selectedTarget && (
-                <div style={{ background: C.light, borderRadius: 12, padding: '14px 18px', marginTop: 16 }}>
+                <div style={{ background: C.primarySoft, border: `1px solid ${C.primary}33`,
+                  borderRadius: 12, padding: '14px 18px', marginTop: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                     <span style={{ fontSize: 12, color: C.muted, fontWeight: 700 }}>Detected task:</span>
                     <TaskPill task={finalTask} C={C} />
@@ -1040,7 +1048,8 @@ function DatasetSetupDrawer({
                 Here's what we detected about your dataset.
               </p>
 
-              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: '6px 20px' }}>
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
+                padding: '6px 20px', boxShadow: shadow2 }}>
                 {[
                   ['Dataset name', dataset.filename],
                   ['Rows × Columns', `${dataset.rowCount} rows · ${dataset.columnCount} columns`],

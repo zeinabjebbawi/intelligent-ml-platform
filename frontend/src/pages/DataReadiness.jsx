@@ -45,6 +45,7 @@ import {
 } from 'recharts'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
+import { getBalanceLevelConfig } from '../constants/balanceLevels'
 import VersionsBar from '../components/VersionsBar'
 
 const shadow  = '0 4px 24px rgba(0,0,0,0.07)'
@@ -756,7 +757,19 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
           const vals = AXIS_KEYS.map(k => nextFp[k] || 0)
           const positive = vals.filter(v => v > 0)
           nextFp.overall = Math.round(positive.reduce((s,v) => s+v, 0) / Math.max(positive.length, 1))
-          return { ...prev, fingerprint: nextFp }
+
+          // The Pre-Training Signal card's score/grade come from the
+          // backend's build_signal_assessment(), computed BEFORE PCA ran
+          // (separability was still 0 then) — without this, the KPI strip
+          // and radar update to the new overall once PCA loads, but the
+          // Signal card keeps showing the stale pre-PCA number right next
+          // to it, which reads as a contradiction on the same page. Mirrors
+          // the backend's own grade thresholds exactly.
+          const nextScore = nextFp.overall
+          const nextGrade = nextScore >= 85 ? 'Excellent' : nextScore >= 70 ? 'Good' : nextScore >= 55 ? 'Fair' : 'Weak'
+          const nextSignal = prev.signal ? { ...prev.signal, score: nextScore, grade: nextGrade } : prev.signal
+
+          return { ...prev, fingerprint: nextFp, signal: nextSignal }
         })
       }
     } catch (e) { setError(e.message) }
@@ -784,7 +797,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   if (!data) return null
 
   const { current, original, class_histograms: classHists,
-          fingerprint, signal, algorithm_recs: algoRecs } = data
+          fingerprint, signal, algorithm_recs: algoRecs, target_quality: targetQuality } = data
 
   const numCols = current?.numeric_cols || []
 
@@ -833,10 +846,19 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
             trend={fingerprint?.completeness === 100 ? 'positive' : 'negative'}
             trendLabel={fingerprint?.completeness === 100 ? 'No missing' : 'Some missing'}
             sub="" />
-          <MetricCard icon="⚖" label="Class Balance"
-            value={fingerprint?.balance >= 70 ? 'Balanced' : fingerprint?.balance >= 40 ? 'Moderate' : 'Skewed'}
-            accent={fingerprint?.balance >= 70 ? C.success : fingerprint?.balance >= 40 ? C.warning : C.danger}
-            sub={current.class_dist?.length > 0 ? current.class_dist.map(d => `${d.class}: ${d.pct}%`).join(' / ') : 'No target set'} />
+          {/* level/color come from the SAME shared check_target_balance()
+              verdict the Sampling page shows (see backend's
+              utils/balance_checker.py + constants/balanceLevels.js) — a
+              dataset gets one consistent balance judgment across the whole
+              app, not a second, independently-bucketed opinion here. */}
+          <MetricCard icon="⚖" label={targetQuality?.is_classification === false ? 'Target Skew' : 'Class Balance'}
+            value={targetQuality ? getBalanceLevelConfig(C)[targetQuality.level]?.label : 'No Target'}
+            accent={targetQuality ? getBalanceLevelConfig(C)[targetQuality.level]?.color : C.muted}
+            sub={
+              !targetQuality ? 'No target set'
+              : targetQuality.is_classification === false ? `skew ${targetQuality.skewness?.toFixed(2)}`
+              : current.class_dist?.length > 0 ? current.class_dist.map(d => `${d.class}: ${d.pct}%`).join(' / ') : ''
+            } />
           <MetricCard icon="✓" label="ML Readiness"
             value={`${Math.round(fingerprint?.overall || 0)}/100`}
             accent={signal?.grade === 'Excellent' ? C.success : signal?.grade === 'Good' ? C.primary : C.warning}
@@ -876,7 +898,9 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
             ) : (
               <ChartCard title="Target Class Distribution">
                 <div style={{ textAlign: 'center', padding: '24px 0', color: C.muted, fontSize: 13 }}>
-                  No target column set — class distribution not available.
+                  {targetQuality?.is_classification === false
+                    ? "This target is continuous (regression) — there are no discrete classes to compare. See Target Skew in the KPI strip above instead."
+                    : "No target column set — class distribution not available."}
                 </div>
               </ChartCard>
             )}

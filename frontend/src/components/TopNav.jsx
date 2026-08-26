@@ -34,7 +34,9 @@ export const NAV_LINKS = [
   { key: 'sampling', label: 'Sampling', enabled: true, order: STEP_ORDER.sampling },
   { key: 'data_readiness', label: 'Visualization', enabled: true, order: STEP_ORDER.data_readiness },
   { key: 'feature_selection', label: 'Feature Selection', enabled: true, order: STEP_ORDER.feature_selection },
-  { key: 'training', label: 'Training', enabled: false, order: STEP_ORDER.training },
+  { key: 'training', label: 'Train and Test', enabled: true, order: STEP_ORDER.training },
+  { key: 'feature_impact', label: 'Feature Importance', enabled: true, order: STEP_ORDER.feature_impact },
+  { key: 'learning_curve', label: 'Learning Curve', enabled: true, order: STEP_ORDER.learning_curve },
   { key: 'report', label: 'Report', enabled: false, order: STEP_ORDER.report },
 ]
 

@@ -20,7 +20,8 @@ STEP_ORDER = {
     'feature_selection':   10,
     'training':            11,
     'feature_impact':      12,
-    'report':              13,
+    'learning_curve':      13,
+    'report':              14,
 }
 
 

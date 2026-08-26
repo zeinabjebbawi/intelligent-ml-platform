@@ -17,6 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest
 import os
 import traceback
+from utils.balance_checker import check_target_balance, balance_score
 
 router = APIRouter(prefix="/visualization", tags=["Visualization"])
 
@@ -135,20 +136,23 @@ def class_distribution(df: pd.DataFrame, target: str) -> List[dict]:
         return []
 
 def compute_fingerprint(df: pd.DataFrame, target: Optional[str],
-                         target_dist: list, ft_corr: list) -> dict:
-    """Compute 6 quality scores (0-100) for the Data Fingerprint radar."""
+                         balance_result: Optional[dict], ft_corr: list) -> dict:
+    """Compute 6 quality scores (0-100) for the Summary radar.
+
+    Balance now comes from the shared check_target_balance() utility (see
+    utils/balance_checker.py) instead of a hand-rolled min/max percentage
+    ratio — that old formula was flat-out wrong for >2 classes (it ignored
+    every class except the largest and smallest, so 5 classes at
+    18/18/18/18/28% scored as if only two classes existed) and had no
+    story at all for a regression target. balance_result is whatever
+    check_target_balance(df[target]) returned at the call site — None only
+    when there's no target column at all.
+    """
     total_cells = df.shape[0] * df.shape[1]
     missing_cells = int(df.isnull().sum().sum())
     completeness = round((1 - missing_cells / max(total_cells, 1)) * 100, 1)
 
-    # Balance: 100 if perfect 50/50, lower for more skewed distributions
-    balance = 50.0
-    if target_dist and len(target_dist) >= 2:
-        min_pct = min(d["pct"] for d in target_dist)
-        max_pct = max(d["pct"] for d in target_dist)
-        balance = round(min_pct / max(max_pct, 1) * 100, 1)
-    elif target_dist and len(target_dist) == 1:
-        balance = 0  # single class = completely imbalanced
+    balance = balance_score(balance_result) if balance_result else 50.0
 
     # Normality: % of numeric columns with |skew| < 1
     num_cols = df.select_dtypes(include=[np.number]).columns
@@ -579,12 +583,19 @@ def analyze(req: AnalyzeReq):
         miss_orig = {col: int(df_orig[col].isna().sum())
                      for col in df_orig.columns} if df_orig is not None else {}
 
-        is_balanced = True
-        if class_curr and len(class_curr) >= 2:
-            min_pct = min(d["pct"] for d in class_curr)
-            is_balanced = min_pct >= 30
+        # Shared platform-wide target-quality check (utils/balance_checker.py)
+        # — same entropy+IR / skewness+kurtosis math the Sampling page uses,
+        # so a dataset gets the same balance verdict on both pages instead of
+        # two routers silently disagreeing. task_type is passed explicitly
+        # here since is_classification_target() already determined it above,
+        # rather than letting the checker re-guess from scratch.
+        target_quality = None
+        if target and target in df.columns:
+            target_quality = check_target_balance(
+                df[target], task_type="classification" if target_is_classification else "regression")
+        is_balanced = bool(target_quality) and target_quality["level"] in ("balanced", "mild")
 
-        fingerprint = compute_fingerprint(df, target, class_curr, ft_corr)
+        fingerprint = compute_fingerprint(df, target, target_quality, ft_corr)
         signal = build_signal_assessment(df, target, ft_corr, fingerprint, skewed_curr)
 
         n_skewed = sum(1 for s in skewed_curr if s["severe"])
@@ -646,6 +657,7 @@ def analyze(req: AnalyzeReq):
             "feature_target_corr": ft_corr,
             "class_histograms":    class_hists,
             "fingerprint":         fingerprint,
+            "target_quality":      target_quality,
             "signal":              signal,
             "algorithm_recs":      algo_recs,
             "target_column":       target,

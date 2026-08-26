@@ -15,6 +15,7 @@ pydantic_core==2.46.4
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 scikit-learn==1.8.0
+shap==0.52.0
 scipy==1.17.1
 six==1.17.0
 sklearn-compat==0.1.6
@@ -24,3 +25,4 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2026.2
 uvicorn==0.46.0
+xgboost==3.4.1

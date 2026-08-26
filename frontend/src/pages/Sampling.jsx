@@ -16,6 +16,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
 import SharedVersionsBar from '../components/VersionsBar'
+import { getBalanceLevelConfig } from '../constants/balanceLevels'
 
 const shadow  = '0 4px 24px rgba(0,0,0,0.08)'
 const shadow2 = '0 1px 4px rgba(0,0,0,0.06)'
@@ -583,15 +584,16 @@ export default function SamplingPage({
   const timeSeriesMode = !!profile?.has_time_warning
 
   const targetInfo = profile?.target_info
-  const LEVEL_CONFIG = {
-    balanced:  { label: 'Balanced',   color: C.success },
-    mild:      { label: 'Mild Imb.',  color: '#84cc16' },
-    moderate:  { label: 'Moderate',   color: C.warning },
-    severe:    { label: 'Severe',     color: C.danger },
-    no_target: { label: 'No Target',  color: C.muted },
-  }
+  const LEVEL_CONFIG = getBalanceLevelConfig(C)
   const levelInfo = LEVEL_CONFIG[targetInfo?.balance_level || 'no_target']
   const imbalanceColor = levelInfo.color
+  // Regression targets go through a completely different check on the
+  // backend (skewness/kurtosis, not class entropy) — see
+  // backend-fastapi/utils/balance_checker.py. is_classification is only
+  // present once a target is actually set; undefined defaults to true so
+  // existing classification datasets render exactly as before.
+  const isRegressionTarget = targetInfo?.is_classification === false && targetInfo?.balance_level !== 'invalid'
+  const isInvalidTarget = targetInfo?.balance_level === 'invalid'
 
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
@@ -687,11 +689,23 @@ export default function SamplingPage({
             )}
           </KPICard>
 
-          <KPICard label="Target Balance"
+          {/* Regression targets get a completely different check (target
+              distribution skewness, not class balance — there are no
+              "classes" to balance in continuous data) via the same shared
+              backend/utils/balance_checker.py used for classification, so
+              this card relabels itself accordingly rather than showing a
+              nonsensical "Balanced/Imbalanced" verdict on a house-price
+              column. */}
+          <KPICard label={isRegressionTarget ? 'Target Distribution' : 'Target Balance'}
             value={targetInfo ? levelInfo.label : 'No target'}
-            sub={targetInfo ? `Column: ${targetInfo.column} · minority ${targetInfo.min_class_pct}%` : 'Set target in the Upload step'}
+            sub={
+              !targetInfo ? 'Set target in the Upload step'
+              : isInvalidTarget ? `Column: ${targetInfo.column}`
+              : isRegressionTarget ? `Column: ${targetInfo.column} · skew ${targetInfo.skewness?.toFixed(2)}`
+              : `Column: ${targetInfo.column} · minority ${targetInfo.min_class_pct}%`
+            }
             accent={imbalanceColor}>
-            {targetInfo && (
+            {targetInfo && !isRegressionTarget && !isInvalidTarget && (
               <div style={{ marginTop: 10 }}>
                 {targetInfo.class_dist.slice(0, 4).map((cls, i) => (
                   <div key={cls.class} style={{ display: 'flex', alignItems: 'center',
@@ -712,9 +726,10 @@ export default function SamplingPage({
           </KPICard>
         </div>
 
-        {/* ── Imbalance guidance banner — color/icon now follow the 4-tier
-            balance_level (balanced/mild/moderate/severe), not just a binary
-            is_imbalanced flag. ─────────────────────────────────────────── */}
+        {/* ── Target-quality guidance banner — color/icon follow the shared
+            level vocabulary (balanced/mild/moderate/severe/invalid) from
+            check_target_balance(), covering classification, regression, and
+            the ID-column / constant-target edge cases with the same banner. */}
         {targetInfo && (
           <div style={{
             background: `${levelInfo.color}1a`,
@@ -722,8 +737,25 @@ export default function SamplingPage({
             borderRadius: 10, padding: '12px 18px', marginBottom: 20,
             fontSize: 13, color: C.text, display: 'flex', alignItems: 'center', gap: 10,
           }}>
-            <span style={{ fontSize: 16 }}>{targetInfo.balance_level === 'balanced' ? '✓' : '⚠'}</span>
+            <span style={{ fontSize: 16 }}>
+              {isInvalidTarget ? '✕' : targetInfo.balance_level === 'balanced' ? '✓' : '⚠'}
+            </span>
             {targetInfo.suggestion}
+          </div>
+        )}
+
+        {/* Sample-starvation warning — a separate, more urgent risk than the
+            balance ratio itself (too few absolute rows to learn from, even
+            if the ratio looks only moderately imbalanced), so it's appended
+            as its own banner rather than folded into the message above. */}
+        {targetInfo?.starvation_warning && (
+          <div style={{
+            background: C.dangerSoft, border: `1px solid ${C.danger}4d`,
+            borderRadius: 10, padding: '12px 18px', marginBottom: 20,
+            fontSize: 13, color: C.danger, display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span style={{ fontSize: 16 }}>⚠</span>
+            {targetInfo.starvation_warning}
           </div>
         )}
 
@@ -1135,11 +1167,20 @@ export default function SamplingPage({
                           can produce hundreds of "classes" here too, and
                           without a cap this pushed the whole page down
                           before the dataset table even came into view. */}
-                      <div style={(targetInfo.class_dist?.length || 0) > CLASS_SCROLL_THRESHOLD
-                        ? { maxHeight: CLASS_SCROLL_MAX_HEIGHT, overflowY: 'auto', paddingRight: 4 }
-                        : {}}>
-                        <ClassBar dist={targetInfo.class_dist} />
-                      </div>
+                      {targetInfo.is_classification === false ? (
+                        <div style={{ fontSize: 12, color: C.muted }}>
+                          Continuous target — skewness {targetInfo.skewness?.toFixed(2)}
+                          {targetInfo.kurtosis != null && ` · kurtosis ${targetInfo.kurtosis.toFixed(2)}`}
+                          . Class balance doesn't apply to regression targets — see the
+                          banner above for distribution guidance.
+                        </div>
+                      ) : (
+                        <div style={(targetInfo.class_dist?.length || 0) > CLASS_SCROLL_THRESHOLD
+                          ? { maxHeight: CLASS_SCROLL_MAX_HEIGHT, overflowY: 'auto', paddingRight: 4 }
+                          : {}}>
+                          <ClassBar dist={targetInfo.class_dist} />
+                        </div>
+                      )}
                     </div>
                   )}
 

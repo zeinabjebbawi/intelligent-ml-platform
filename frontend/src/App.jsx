@@ -7,6 +7,9 @@ import FeatureEngineeringPage from './pages/FeatureEngineering';
 import SamplingPage from './pages/Sampling';
 import DataReadinessPage from './pages/DataReadiness';
 import FeatureSelectionPage from './pages/FeatureSelection';
+import TrainTestPage from './pages/TrainTest';
+import FeatureImportancePage from './pages/FeatureImportance';
+import LearningCurvePage from './pages/LearningCurve';
 import { authAPI, projectsAPI, datasetsAPI, versionsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
@@ -147,6 +150,11 @@ function App() {
   const [projectId, setProjectId] = useState(null);
   const [bootstrapError, setBootstrapError] = useState('');
   const [uploadMeta, setUploadMeta] = useState(null);
+  // Set by TrainTestPage's onUpdateData after a successful /training/train
+  // call — the .pkl path of the most recently trained model, threaded into
+  // FeatureImportancePage below so it can run SHAP/importance against it
+  // without the two pages needing any other shared state.
+  const [lastModelPath, setLastModelPath] = useState(null);
 
   // The highest STEP_ORDER value the user has ever advanced INTO via a
   // page's own "Continue" button (see advance() below) — never lowered by
@@ -431,11 +439,7 @@ function App() {
       <div>
         <FeatureSelectionPage
           projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
-          onNext={(next) => {
-            // Training doesn't exist yet — deliberately a no-op rather than
-            // faking a transition to a page that isn't real (same reasoning
-            // as the other pages' onNext above).
-          }}
+          onNext={(next) => advance('training')}
           onUpdateData={(update) => { if (update.cleanedFilePath) setFilePath(update.cleanedFilePath); }}
           getDisplayPath={versionHistory.getDisplayPath}
           getInputPath={versionHistory.getInputPath}
@@ -449,10 +453,66 @@ function App() {
           furthestOrder={furthestOrder}
           shapData={null}
         />
-        {/* No forward button here — Training doesn't exist yet, so there's
-            nowhere to advance to. Backward navigation is TopNav-only, same
-            as every other page. */}
+        {/* No footer button here — FeatureSelectionPage already renders its
+            own real, fixed-position "Continue to Training →" button (after
+            "Confirm Selection & Save Version" is clicked first), wired to
+            onNext above. Adding a second one here would just duplicate it
+            and, worse, sit visually underneath FeatureSelectionPage's own
+            position:fixed footer, intercepting clicks — confirmed live via
+            Playwright before this was reverted. */}
       </div>
+    );
+  }
+
+  if (stage === 'training') {
+    return (
+      <TrainTestPage
+        projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
+        onNext={() => advance('feature_impact')}
+        onUpdateData={(update) => { if (update.lastModelPath) setLastModelPath(update.lastModelPath); }}
+        getDisplayPath={versionHistory.getDisplayPath}
+        versions={versionHistory.versions}
+        active={navActive}
+        onNavigate={handleNavigate}
+        furthestOrder={furthestOrder}
+      />
+    );
+  }
+
+  if (stage === 'feature_impact') {
+    return (
+      <FeatureImportancePage
+        projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
+        modelPklPath={lastModelPath}
+        onNext={() => advance('learning_curve')}
+        onGoTo={handleNavigate}
+        getDisplayPath={versionHistory.getDisplayPath}
+        versions={versionHistory.versions}
+        active={navActive}
+        onNavigate={handleNavigate}
+        furthestOrder={furthestOrder}
+      />
+    );
+  }
+
+  if (stage === 'learning_curve') {
+    return (
+      <LearningCurvePage
+        projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
+        modelPklPath={lastModelPath}
+        onNext={() => {
+          // Report doesn't exist yet (see docs/SESSION_HANDOFF_VIZ_TRAINING_
+          // BALANCE.md open item #3) — deliberately a no-op rather than
+          // faking a transition to a page that isn't real, same reasoning
+          // as every other "next page doesn't exist yet" stage in this file.
+        }}
+        onGoTo={handleNavigate}
+        getDisplayPath={versionHistory.getDisplayPath}
+        versions={versionHistory.versions}
+        active={navActive}
+        onNavigate={handleNavigate}
+        furthestOrder={furthestOrder}
+      />
     );
   }
 

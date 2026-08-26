@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import os
 from imblearn.over_sampling import SMOTE, SMOTENC
+from utils.balance_checker import check_target_balance
 
 router = APIRouter(prefix="/sampling", tags=["Sampling"])
 
@@ -52,30 +53,6 @@ def get_class_dist(series: pd.Series) -> List[dict]:
          "pct":   round(cnt / total * 100, 1)}
         for cls, cnt in clean.value_counts().items()
     ]
-
-def check_imbalance(dist: List[dict]) -> tuple:
-    """Returns (is_imbalanced, level, min_pct).
-
-    Levels follow minority-class-percentage bands (equivalently, minority:
-    majority ratio bands) rather than a single naive 20% cutoff — the old
-    cutoff was marking real-world mild imbalances (e.g. a 35/65 split) as
-    perfectly "balanced" and vice versa:
-      balanced  — 40-50%   (~1:1 to 1:1.5)  — standard algorithms work fine
-      mild      — 20-40%   (~1:1.5 to 1:4)  — most models handle this as-is
-      moderate  — 1-20%    (~1:4 to 1:100)  — needs class weighting / SMOTE
-      severe    — <1%      (worse than 1:100) — needs specialized techniques
-    """
-    if len(dist) < 2:
-        return False, 'no_target', 100.0
-    min_pct = round(min(d["pct"] for d in dist), 1)
-    if min_pct >= 40:
-        return False, 'balanced', min_pct
-    elif min_pct >= 20:
-        return True, 'mild', min_pct
-    elif min_pct >= 1:
-        return True, 'moderate', min_pct
-    else:
-        return True, 'severe', min_pct
 
 def get_skewness_summary(df: pd.DataFrame) -> List[dict]:
     result = []
@@ -145,23 +122,6 @@ def auto_detect_target(df: pd.DataFrame) -> Optional[str]:
     if df[last].nunique() <= 15 and not pd.api.types.is_float_dtype(df[last]):
         return last
     return None
-
-_LEVEL_TEXT = {
-    'balanced': "Classes are well balanced. Sampling for size reduction is recommended.",
-    'mild':     "Mild imbalance. Most models handle this without adjustment — sampling is optional.",
-    'moderate': "Moderate imbalance detected. Stratified Sampling or Majority Undersampling is recommended.",
-    'severe':   "Severe imbalance (<1% minority class). Standard sampling may not be enough — specialized "
-                "techniques (e.g. anomaly detection, ensemble methods) are usually needed.",
-}
-
-def imbalance_suggestion(dist: List[dict], level: str, min_pct: float) -> str:
-    if not dist or level == 'no_target':
-        return "No usable target column was found for a balance check."
-    base = _LEVEL_TEXT.get(level, _LEVEL_TEXT['moderate'])
-    if level == 'balanced':
-        return base
-    minority = min(dist, key=lambda d: d["pct"])
-    return f"{base} Class '{minority['class']}' is the minority at {min_pct}% ({minority['count']:,} rows)."
 
 def _sample_per_group(df: pd.DataFrame, col: str, sampler) -> pd.DataFrame:
     """Samples each group of df (split by col) via `sampler(group_df)` and
@@ -391,17 +351,28 @@ def profile_dataset(req: ProfileReq):
 
         datetime_cols = detect_datetime_cols(df)
 
+        # Shared platform-wide target-quality check (see utils/balance_checker.py)
+        # — entropy + imbalance ratio for classification, skewness/kurtosis for
+        # regression, K auto-detected from the column itself when not passed
+        # explicitly (no task_type field on this request yet).
         target_info = None
         if target_col and target_col in df.columns:
-            dist = get_class_dist(df[target_col])
-            is_imb, level, min_pct = check_imbalance(dist)
+            balance = check_target_balance(df[target_col])
             target_info = {
-                "column":        target_col,
-                "class_dist":    dist,
-                "is_imbalanced": is_imb,
-                "balance_level": level,
-                "min_class_pct": min_pct,
-                "suggestion":    imbalance_suggestion(dist, level, min_pct),
+                "column":             target_col,
+                "class_dist":         balance.get("class_dist", []),
+                "is_imbalanced":      balance["level"] not in ("balanced",),
+                "balance_level":      balance["level"],
+                "title":              balance["title"],
+                "suggestion":         balance["message"],
+                "is_classification":  balance["is_classification"],
+                "min_class_pct":      (min(d["pct"] for d in balance["class_dist"])
+                                        if balance.get("class_dist") else None),
+                "evenness":           balance.get("evenness"),
+                "imbalance_ratio":    balance.get("imbalance_ratio"),
+                "skewness":           balance.get("skewness"),
+                "kurtosis":           balance.get("kurtosis"),
+                "starvation_warning": balance.get("starvation_warning"),
             }
 
         num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
