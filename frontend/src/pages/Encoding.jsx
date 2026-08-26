@@ -375,7 +375,7 @@ function DatasetTable({
           header (see TABLE_BODY_MAX_HEIGHT) so a 50-row dataset doesn't push
           the encoding/scaling control rows and Apply button far down the
           page; those controls stay in view around this inner scroll area. */}
-      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto' }}>
+      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: totalWidth }}>
           <colgroup>
             <col style={{ width: ROW_N_W }} />
@@ -445,7 +445,7 @@ function AppliedDataTable({ C, cols, rows, typeColors }) {
           this is the "Before"/"After" table, so without a cap a 50-row
           dataset would push the OTHER table (and, pre-comparison, the
           Apply button) far down the page. */}
-      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto' }}>
+      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: totalWidth }}>
           <colgroup>
             <col style={{ width: ROW_N_W }} />
@@ -551,7 +551,7 @@ function PreviewTable({ C, profile, encodingResults, scalingResults }) {
           DatasetTable/AppliedDataTable (TABLE_BODY_MAX_HEIGHT) — without
           this, a many-row dataset made this preview (and the whole page)
           grow arbitrarily tall once any column was actually transformed. */}
-      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto' }}>
+      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
       <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: totalWidth }}>
         <colgroup>
           <col style={{ width: ROW_N_W }} />

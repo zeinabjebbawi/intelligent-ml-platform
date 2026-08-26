@@ -335,7 +335,7 @@ function App() {
 
   if (stage === 'encoding') {
     return (
-      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '32px 24px' }}>
+      <div>
         <EncodingPage
           projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
           onNext={(next) => {
