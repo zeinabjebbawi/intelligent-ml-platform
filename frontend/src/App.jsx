@@ -10,6 +10,7 @@ import FeatureSelectionPage from './pages/FeatureSelection';
 import TrainTestPage from './pages/TrainTest';
 import FeatureImportancePage from './pages/FeatureImportance';
 import LearningCurvePage from './pages/LearningCurve';
+import SimulatorPage from './pages/Simulator';
 import { authAPI, projectsAPI, datasetsAPI, versionsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
@@ -498,6 +499,22 @@ function App() {
   if (stage === 'learning_curve') {
     return (
       <LearningCurvePage
+        projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
+        modelPklPath={lastModelPath}
+        onNext={() => advance('simulator')}
+        onGoTo={handleNavigate}
+        getDisplayPath={versionHistory.getDisplayPath}
+        versions={versionHistory.versions}
+        active={navActive}
+        onNavigate={handleNavigate}
+        furthestOrder={furthestOrder}
+      />
+    );
+  }
+
+  if (stage === 'simulator') {
+    return (
+      <SimulatorPage
         projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
         modelPklPath={lastModelPath}
         onNext={() => {

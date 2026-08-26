@@ -18,14 +18,10 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from utils.shap_helpers import TREE_MODELS, unwrap_model, select_class_shap, make_kernel_predict_fn
 warnings.filterwarnings("ignore")
 
 router = APIRouter(prefix="/feature-impact", tags=["Feature Importance"])
-
-# Same set training_router.py's build_model() leaves UNWRAPPED (raw
-# estimator, not a Pipeline) — these are the only model types that expose a
-# real split-based weight/gain/coverage concept at all.
-TREE_MODELS = {"decision_tree", "random_forest", "random_forest_regressor", "xgboost"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -56,17 +52,6 @@ def safe_round(x, nd=5):
     if xf != xf or xf in (float("inf"), float("-inf")):
         return None
     return round(xf, nd)
-
-def unwrap_model(model):
-    """training_router.py's build_model() wraps scale-sensitive models
-    (knn/svm/logistic_regression/linear_regression/ridge_regression) in an
-    sklearn Pipeline("scaler" -> "model") — a Pipeline does NOT forward
-    attributes like .coef_/.feature_importances_ from its final step, so
-    any code that needs those must unwrap first. Same helper as
-    training_router.py's own unwrap_model()."""
-    if hasattr(model, "named_steps"):
-        return model.named_steps.get("model", model)
-    return model
 
 def dot_color(norm_val: float) -> str:
     """Blue (low feature value) → white → red (high feature value) — the
@@ -167,24 +152,6 @@ def to_ranked_list(d: Dict[str, float]) -> List[Dict]:
 # SHAP COMPUTATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _select_class_shap(shap_values):
-    """Normalize whatever shape shap.Explainer().shap_values() handed back
-    into one (n_samples, n_features) array. Older shap versions return a
-    LIST of per-class arrays for classifiers; newer versions (this pattern
-    surfaced in training_router.py's own numpy-type bugs — shap has the same
-    "the library's exact output shape isn't guaranteed by version" problem)
-    can instead return one 3D ndarray (n_samples, n_features, n_classes).
-    Either way, for multiclass this deliberately picks class index 1 (the
-    positive class for binary) as the one summary shown — same choice the
-    original single-branch version made, just made version-safe."""
-    if isinstance(shap_values, list):
-        return np.asarray(shap_values[1] if len(shap_values) > 1 else shap_values[0])
-    arr = np.asarray(shap_values)
-    if arr.ndim == 3:
-        idx = 1 if arr.shape[-1] > 1 else 0
-        return arr[:, :, idx]
-    return arr
-
 def compute_shap(model, X: pd.DataFrame, model_name: str, task_type: str,
                  max_samples: int = 200) -> dict:
     try:
@@ -220,21 +187,11 @@ def compute_shap(model, X: pd.DataFrame, model_name: str, task_type: str,
             bg_n = min(30, len(X_s))
             bg = shap.sample(X_s, bg_n, random_state=42)
             use_proba = task_type == "classification" and hasattr(model, "predict_proba")
-            # A plain wrapping function, NOT the model's bound method
-            # directly. shap's KernelExplainer tries to stamp metadata
-            # (feature_names_in_) onto whatever callable it's given — for a
-            # bound method that attempt lands on the underlying object, and
-            # sklearn's Pipeline exposes feature_names_in_ as a read-only
-            # property with no setter, raising
-            # `AttributeError: property 'feature_names_in_' of 'Pipeline'
-            # object has no setter`. Confirmed live: every Pipeline-wrapped
-            # model here (knn/svm/logistic_regression/linear_regression/
-            # ridge_regression — see training_router.py's build_model())
-            # crashed with exactly this until routed through a wrapper
-            # function instead, which has no such property to fail on.
-            def _predict_fn(arr):
-                return model.predict_proba(arr) if use_proba else model.predict(arr)
-            explainer = shap.KernelExplainer(_predict_fn, bg)
+            # make_kernel_predict_fn wraps the call in a plain function
+            # rather than passing the model's bound method directly — see
+            # utils/shap_helpers.py's docstring (and memory:
+            # shap_pipeline_gotchas.md) for why that matters.
+            explainer = shap.KernelExplainer(make_kernel_predict_fn(model, use_proba), bg)
             # KernelExplainer is far slower than TreeExplainer — cap how many
             # rows actually get explained so this endpoint stays responsive.
             eval_n = min(len(X_s), 120)
@@ -244,7 +201,7 @@ def compute_shap(model, X: pd.DataFrame, model_name: str, task_type: str,
         return {"error": str(e)}
 
     feature_names = list(X_s.columns)
-    sv = _select_class_shap(shap_values)
+    sv = select_class_shap(shap_values)
     if sv.ndim == 1:
         sv = sv.reshape(1, -1)
 

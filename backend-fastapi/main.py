@@ -92,6 +92,7 @@ from diagnose_router import router as diagnose_router
 from training_router import router as training_router
 from feature_impact_router import router as fi_router
 from learning_curve_router import router as lc_router
+from simulator_router import router as sim_router
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FASTAPI APP SETUP
@@ -114,6 +115,7 @@ app.include_router(diagnose_router)
 app.include_router(training_router)
 app.include_router(fi_router)
 app.include_router(lc_router)
+app.include_router(sim_router)
 
 # CORS: allow React (port 5173) and Django (port 8080) to call this API
 #

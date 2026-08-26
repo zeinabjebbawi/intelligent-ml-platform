@@ -26,7 +26,7 @@ export const STEP_ORDER = {
   cleaning_duplicates: 3, cleaning_outliers: 4, cleaning_missing: 5,
   encoding: 6, feature_engineering: 7,
   sampling: 8, data_readiness: 9, feature_selection: 10,
-  training: 11, feature_impact: 12, learning_curve: 13, report: 14,
+  training: 11, feature_impact: 12, learning_curve: 13, simulator: 14, report: 15,
 }
 
 export default function useVersionHistory(projectId, initialFilePath) {
