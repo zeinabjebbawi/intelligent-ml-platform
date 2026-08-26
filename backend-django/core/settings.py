@@ -71,6 +71,8 @@ CORS_ALLOWED_ORIGINS = [
                                 # main.py CORS comment: on a dual-stack machine
                                 # "localhost" can resolve to ::1 as well as
                                 # 127.0.0.1, so both origins are kept allowed.
+    'http://localhost:5174',   # Vite auto-bumps here when 5173 is already taken
+    'http://127.0.0.1:5174',   # by another running dev server instance.
     'http://localhost:3000',   # React, if ever run on the CRA-style port instead
     'http://127.0.0.1:3000',
 ]
