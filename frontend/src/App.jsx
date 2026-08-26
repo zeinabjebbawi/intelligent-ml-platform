@@ -11,6 +11,7 @@ import TrainTestPage from './pages/TrainTest';
 import FeatureImportancePage from './pages/FeatureImportance';
 import LearningCurvePage from './pages/LearningCurve';
 import SimulatorPage from './pages/Simulator';
+import ReportPage from './pages/Report';
 import { authAPI, projectsAPI, datasetsAPI, versionsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
@@ -156,6 +157,14 @@ function App() {
   // FeatureImportancePage below so it can run SHAP/importance against it
   // without the two pages needing any other shared state.
   const [lastModelPath, setLastModelPath] = useState(null);
+  // Everything else the Report page's Key Findings/exports need, accumulated
+  // as pages hand it up via their own onUpdateData — lastModelName/
+  // lastModelParams/lastMetrics/trainRatio (from TrainTest.jsx, alongside
+  // lastModelPath above) and selectedFeatures (from FeatureSelection.jsx).
+  // One merged object rather than a separate useState per field, since
+  // Report only ever needs to read these, never react to one individually.
+  const [reportContext, setReportContext] = useState({});
+  const mergeReportContext = (update) => setReportContext(prev => ({ ...prev, ...update }));
 
   // The highest STEP_ORDER value the user has ever advanced INTO via a
   // page's own "Continue" button (see advance() below) — never lowered by
@@ -417,7 +426,7 @@ function App() {
     return (
       <div>
         <DataReadinessPage
-          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
+          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
           onNext={(next) => advance('feature_selection')}
           onUpdateData={(update) => { if (update.cleanedFilePath) setFilePath(update.cleanedFilePath); }}
           getDisplayPath={versionHistory.getDisplayPath}
@@ -441,7 +450,10 @@ function App() {
         <FeatureSelectionPage
           projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
           onNext={(next) => advance('training')}
-          onUpdateData={(update) => { if (update.cleanedFilePath) setFilePath(update.cleanedFilePath); }}
+          onUpdateData={(update) => {
+            if (update.cleanedFilePath) setFilePath(update.cleanedFilePath);
+            if (update.selectedFeatures) mergeReportContext({ selectedFeatures: update.selectedFeatures });
+          }}
           getDisplayPath={versionHistory.getDisplayPath}
           getInputPath={versionHistory.getInputPath}
           registerVersion={versionHistory.registerVersion}
@@ -470,7 +482,11 @@ function App() {
       <TrainTestPage
         projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
         onNext={() => advance('feature_impact')}
-        onUpdateData={(update) => { if (update.lastModelPath) setLastModelPath(update.lastModelPath); }}
+        onUpdateData={(update) => {
+          if (update.lastModelPath) setLastModelPath(update.lastModelPath);
+          const { lastModelName, lastModelParams, lastMetrics, trainRatio } = update;
+          mergeReportContext({ lastModelName, lastModelParams, lastMetrics, trainRatio });
+        }}
         getDisplayPath={versionHistory.getDisplayPath}
         versions={versionHistory.versions}
         active={navActive}
@@ -517,13 +533,25 @@ function App() {
       <SimulatorPage
         projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
         modelPklPath={lastModelPath}
-        onNext={() => {
-          // Report doesn't exist yet (see docs/SESSION_HANDOFF_VIZ_TRAINING_
-          // BALANCE.md open item #3) — deliberately a no-op rather than
-          // faking a transition to a page that isn't real, same reasoning
-          // as every other "next page doesn't exist yet" stage in this file.
-        }}
+        onNext={() => advance('report')}
         onGoTo={handleNavigate}
+        getDisplayPath={versionHistory.getDisplayPath}
+        versions={versionHistory.versions}
+        active={navActive}
+        onNavigate={handleNavigate}
+        furthestOrder={furthestOrder}
+      />
+    );
+  }
+
+  if (stage === 'report') {
+    return (
+      <ReportPage
+        projectData={{
+          filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType,
+          lastModelPath, ...reportContext,
+        }}
+        modelPklPath={lastModelPath}
         getDisplayPath={versionHistory.getDisplayPath}
         versions={versionHistory.versions}
         active={navActive}

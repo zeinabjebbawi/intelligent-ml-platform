@@ -38,7 +38,7 @@ export const NAV_LINKS = [
   { key: 'feature_impact', label: 'Feature Importance', enabled: true, order: STEP_ORDER.feature_impact },
   { key: 'learning_curve', label: 'Learning Curve', enabled: true, order: STEP_ORDER.learning_curve },
   { key: 'simulator', label: 'Simulator', enabled: true, order: STEP_ORDER.simulator },
-  { key: 'report', label: 'Report', enabled: false, order: STEP_ORDER.report },
+  { key: 'report', label: 'Report', enabled: true, order: STEP_ORDER.report },
 ]
 
 export default function TopNav({ active, onNavigate, furthestOrder = Infinity }) {

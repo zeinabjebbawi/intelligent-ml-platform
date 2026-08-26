@@ -968,11 +968,23 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
       })
       setModelHistory(h => [result, ...h])
       setActiveResult(result)
-      // Threads the freshly-saved .pkl path up to App.jsx so the Feature
-      // Importance page can run SHAP/importance against it — always the
-      // MOST RECENT successful training run, matching the pasted
-      // integration spec exactly (`projectData?.lastModelPath`).
-      if (onUpdateData) onUpdateData({ lastModelPath: result.model_file })
+      // Threads the freshly-saved .pkl path (and enough of this run's own
+      // result to build the Report page's Key Findings/metrics strip
+      // without Report having to re-derive or re-run anything) up to
+      // App.jsx — always the MOST RECENT successful training run, matching
+      // the pasted integration spec's `projectData?.lastModelPath`.
+      const metricsByTask = {
+        classification: { accuracy: result.accuracy, f1: result.f1, precision: result.precision, recall: result.recall },
+        regression:     { r2: result.r2, mae: result.mae, rmse: result.rmse },
+        clustering:     { n_clusters: result.n_clusters, inertia: result.inertia, entropy: result.entropy },
+      }
+      if (onUpdateData) onUpdateData({
+        lastModelPath: result.model_file,
+        lastModelName: result.model_name,
+        lastModelParams: params,
+        lastMetrics: metricsByTask[taskType] || {},
+        trainRatio: splitRatio,
+      })
     } catch (e) { setTrainingError(e.message) }
     finally { setTrainingLoading(false) }
   }

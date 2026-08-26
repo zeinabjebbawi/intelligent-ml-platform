@@ -252,20 +252,38 @@ def build_signal_assessment(df, target, ft_corr, fingerprint, skewed):
     grade = "Excellent" if score >= 85 else "Good" if score >= 70 else "Fair" if score >= 55 else "Weak"
     return {"score": score, "grade": grade, "strengths": strengths, "warnings": warnings}
 
-def build_algo_recs(df, task_type, row_count, col_count, is_balanced, n_skewed, ft_corr, fingerprint):
-    """Rule-based algorithm fit table. Two completely separate algorithm
-    LISTS for classification vs regression — the previous version accepted
-    a `target_type` parameter and never once read it, so a regression
-    target still saw "Logistic Regression" recommended (a classification-
-    only algorithm) and every dataset produced the exact same 5 names with
-    only minor star-count wobble. Every star rating and reason below is
-    derived from THIS dataset's actual numbers (row/col count, correlation
-    strength, skew count, outlier prevalence, categorical cardinality) —
-    never a fixed template — so two different datasets of the same task
-    type genuinely produce different results, not just cosmetic variation.
-    """
-    def stars(n): return min(5, max(1, round(n)))
+# The platform's REAL model catalog (must match training_router.py's
+# build_model() exactly — recommending an algorithm that isn't actually
+# selectable on the Train and Test page is worse than not recommending it
+# at all). Decision Tree is ONE entry here (CART/entropy is a toggle on
+# that model, not two separate algorithms).
+CLASSIFICATION_ALGOS = {"Random Forest", "XGBoost", "Logistic Regression", "K-Nearest Neighbors",
+                        "Decision Tree", "Support Vector Machine (SVM)", "Naive Bayes"}
+REGRESSION_ALGOS = {"Linear Regression", "Ridge Regression", "Random Forest Regressor"}
+CLUSTERING_ALGOS = {"K-Means"}
 
+def build_algo_recs(df, task_type, row_count, col_count, is_balanced, n_skewed, ft_corr, fingerprint):
+    """Rule-based algorithm fit table, scoped to exactly the models this
+    platform actually offers on the Train and Test page for the task type
+    the user picked on Upload (`task_type` is now passed in explicitly by
+    the caller — see /analyze — rather than re-guessed from the target
+    column's shape, which silently misfired for clustering: no target
+    column at all used to fall through to the regression branch, showing
+    Linear Regression/SVR/etc. for a K-Means dataset).
+
+    Every candidate gets a continuous 0–10 SCORE (not a small integer
+    delta) derived from THIS dataset's actual numbers (row/col count,
+    correlation strength, skew count, outlier prevalence, categorical
+    cardinality, class balance) — never a fixed template. Stars are then
+    assigned RELATIVE TO THE BEST SCORE for this dataset: the top candidate
+    always gets 5 (surfaced as "Recommended" by the frontend's AlgoTable),
+    and every other candidate's stars drop off in proportion to how far
+    behind it actually is — so a genuinely clear best fit stands out
+    instead of 3–4 models all landing in the same narrow 3–4 star band
+    (confirmed live: the previous integer-delta formula almost never
+    produced a 5-star result at all, leaving the UI's "Recommended" badge
+    permanently unused).
+    """
     top_corr = ft_corr[0]["abs_corr"] if ft_corr else 0.0
     avg_corr = float(np.mean([x["abs_corr"] for x in ft_corr])) if ft_corr else 0.0
     cleanliness = fingerprint.get("cleanliness", 100) if fingerprint else 100
@@ -276,89 +294,119 @@ def build_algo_recs(df, task_type, row_count, col_count, is_balanced, n_skewed, 
     cat_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
     high_card_cats = [c for c in cat_cols if df[c].nunique() > 20]
 
-    recs = []
+    candidates = []  # (name, score 0-10, reason parts)
 
     if task_type == "classification":
-        # Random Forest Classifier
-        rf_s, rf_r = 4, ["Handles non-linear relationships and mixed data types well"]
-        if not is_balanced: rf_r.append("more robust to the class imbalance here than linear models")
-        if n_skewed > 2: rf_r.append(f"unaffected by the {n_skewed} still-skewed feature(s)")
-        if cleanliness < 90: rf_r.append(f"tolerant of the outliers still present ({100-cleanliness:.0f}% of rows affected)")
-        recs.append({"name": "Random Forest Classifier", "stars": stars(rf_s), "reason": " · ".join(rf_r)})
+        s, r = 7.0, ["Handles non-linear relationships and mixed data types well"]
+        if not is_balanced: s += 0.7; r.append("more robust to the class imbalance here than linear models")
+        if n_skewed > 2: s += 0.4; r.append(f"unaffected by the {n_skewed} still-skewed feature(s)")
+        if cleanliness < 90: s += 0.4; r.append(f"tolerant of the outliers still present ({100-cleanliness:.0f}% of rows affected)")
+        if tiny_data: s -= 0.8; r.append(f"only {row_count} rows — an ensemble has less benefit at this size")
+        candidates.append(("Random Forest", s, r))
 
-        # Logistic Regression
-        lr_s, lr_r = 3, []
+        s, r = 7.2, ["Gradient boosting typically edges out a plain Random Forest on tabular data"]
+        if large_data: s += 0.8; r.append(f"{row_count:,} rows is enough data for boosting's iterative fitting to pay off")
+        if tiny_data: s -= 1.5; r.append(f"only {row_count} rows — boosting overfits easily this small without heavy tuning")
+        if not is_balanced: s += 0.3; r.append("handles class imbalance well with its own weighting options")
+        if cleanliness < 85: s -= 0.4; r.append("can chase remaining outliers if not regularized")
+        candidates.append(("XGBoost", s, r))
+
+        s, r = 5.0, []
         if is_balanced and top_corr > 0.3:
-            lr_s += 1; lr_r.append(f"balanced classes + a real linear signal (max |r|={top_corr:.2f})")
+            s += 2.5; r.append(f"balanced classes + a real linear signal (max |r|={top_corr:.2f})")
         elif top_corr > 0.3:
-            lr_r.append(f"strongest feature shows a real linear relationship (|r|={top_corr:.2f})")
-        if n_skewed > 3: lr_s -= 1; lr_r.append(f"{n_skewed} skewed features may violate linearity assumptions")
-        if high_card_cats: lr_s -= 1; lr_r.append(f"{len(high_card_cats)} high-cardinality categorical column(s) need encoding first")
-        if not is_balanced: lr_r.append("class imbalance can bias the decision boundary without class weighting")
-        recs.append({"name": "Logistic Regression", "stars": stars(lr_s),
-                     "reason": " · ".join(lr_r) or "Standard interpretable baseline for this data shape"})
+            s += 1.2; r.append(f"strongest feature shows a real linear relationship (|r|={top_corr:.2f})")
+        else:
+            s -= 1.0; r.append("no strong linear signal detected between any feature and the target")
+        if n_skewed > 3: s -= 1.0; r.append(f"{n_skewed} skewed features may violate linearity assumptions")
+        if high_card_cats: s -= 1.2; r.append(f"{len(high_card_cats)} high-cardinality categorical column(s) need encoding first")
+        if not is_balanced: s -= 0.6; r.append("class imbalance can bias the decision boundary without class weighting")
+        candidates.append(("Logistic Regression", s, r or ["Standard interpretable baseline for this data shape"]))
 
-        # KNN
-        knn_s = 4 if (row_count < 2000 and not high_dim) else (2 if high_dim else 3)
-        knn_r = [f"{row_count:,} rows / {col_count} columns {'suits' if not high_dim else 'works against'} distance-based methods"]
-        if high_dim: knn_r.append("high dimensionality dilutes distance metrics (curse of dimensionality)")
-        if cleanliness < 85: knn_s -= 1; knn_r.append("sensitive to the outliers still present")
-        recs.append({"name": "K-Nearest Neighbors", "stars": stars(knn_s), "reason": " · ".join(knn_r)})
+        s = 6.5 if (row_count < 2000 and not high_dim) else (3.0 if high_dim else 4.5)
+        r = [f"{row_count:,} rows / {col_count} columns {'suits' if not high_dim else 'works against'} distance-based methods"]
+        if high_dim: r.append("high dimensionality dilutes distance metrics (curse of dimensionality)")
+        if cleanliness < 85: s -= 1.0; r.append("sensitive to the outliers still present")
+        candidates.append(("K-Nearest Neighbors", s, r))
 
-        # Decision Tree Classifier
-        dt_s, dt_r = 3, ["Fast and directly interpretable — a good baseline to compare others against"]
-        if tiny_data: dt_s -= 1; dt_r.append(f"only {row_count} rows — a single tree overfits easily this small")
-        recs.append({"name": "Decision Tree Classifier", "stars": stars(dt_s), "reason": " · ".join(dt_r)})
+        s, r = 4.5, ["Fast and directly interpretable — a good baseline to compare others against"]
+        if tiny_data: s -= 1.2; r.append(f"only {row_count} rows — a single tree overfits easily this small")
+        else: s -= 0.5; r.append("a single tree usually underperforms an ensemble like Random Forest/XGBoost")
+        candidates.append(("Decision Tree", s, r))
 
-        # SVM (SVC)
-        svm_s = 3 + (1 if high_dim else 0) - (1 if large_data else 0)
-        svm_r = []
-        if high_dim: svm_r.append(f"{col_count} features — SVMs are strong in high-dimensional spaces")
-        if large_data: svm_r.append(f"{row_count:,} rows will make training noticeably slower")
-        if is_balanced: svm_r.append("balanced classes suit the standard margin-based objective")
-        recs.append({"name": "Support Vector Machine (SVC)", "stars": stars(svm_s),
-                     "reason": " · ".join(svm_r) or "Solid general-purpose choice for this dataset size"})
+        s = 5.0 + (1.3 if high_dim else 0) - (1.3 if large_data else 0)
+        r = []
+        if high_dim: r.append(f"{col_count} features — SVMs are strong in high-dimensional spaces")
+        if large_data: r.append(f"{row_count:,} rows will make training noticeably slower")
+        if is_balanced: r.append("balanced classes suit the standard margin-based objective")
+        candidates.append(("Support Vector Machine (SVM)", s, r or ["Solid general-purpose choice for this dataset size"]))
 
-    else:  # regression
-        # Random Forest Regressor
-        rf_s, rf_r = 4, ["Handles non-linear relationships and mixed data types well"]
-        if n_skewed > 2: rf_r.append(f"unaffected by the {n_skewed} still-skewed feature(s)")
-        if cleanliness < 90: rf_r.append(f"tolerant of the outliers still present ({100-cleanliness:.0f}% of rows affected)")
-        recs.append({"name": "Random Forest Regressor", "stars": stars(rf_s), "reason": " · ".join(rf_r)})
+        s, r = 3.5, ["Extremely fast, and a reasonable baseline when features are roughly independent"]
+        if high_dim: s += 0.8; r.append(f"{col_count} features — Naive Bayes scales effortlessly with dimensionality")
+        if tiny_data: s += 0.5; r.append(f"only {row_count} rows — its strong independence assumption needs little data to fit")
+        s -= 0.5; r.append("its feature-independence assumption is rarely fully true in real data, capping accuracy")
+        candidates.append(("Naive Bayes", s, r))
 
-        # Linear Regression
-        lin_s, lin_r = 3, []
+    elif task_type == "regression":
+        s, r = 7.0, ["Handles non-linear relationships and mixed data types well"]
+        if n_skewed > 2: s += 0.4; r.append(f"unaffected by the {n_skewed} still-skewed feature(s)")
+        if cleanliness < 90: s += 0.4; r.append(f"tolerant of the outliers still present ({100-cleanliness:.0f}% of rows affected)")
+        if tiny_data: s -= 0.8; r.append(f"only {row_count} rows — an ensemble has less benefit at this size")
+        candidates.append(("Random Forest Regressor", s, r))
+
+        s, r = 5.0, []
         if top_corr > 0.4 and n_skewed <= 1:
-            lin_s += 1; lin_r.append(f"strong linear signal (max |r|={top_corr:.2f}) with mostly-normal features")
+            s += 2.5; r.append(f"strong linear signal (max |r|={top_corr:.2f}) with mostly-normal features")
         elif top_corr > 0.4:
-            lin_r.append(f"strongest feature is strongly correlated with the target (|r|={top_corr:.2f})")
-        if n_skewed > 3: lin_s -= 1; lin_r.append(f"{n_skewed} skewed features may violate linearity/normality assumptions")
-        if high_card_cats: lin_s -= 1; lin_r.append(f"{len(high_card_cats)} high-cardinality categorical column(s) need encoding first")
-        recs.append({"name": "Linear Regression", "stars": stars(lin_s),
-                     "reason": " · ".join(lin_r) or "Standard interpretable baseline for this data shape"})
+            s += 1.2; r.append(f"strongest feature is strongly correlated with the target (|r|={top_corr:.2f})")
+        else:
+            s -= 1.0; r.append("no strong linear signal detected between any feature and the target")
+        if n_skewed > 3: s -= 1.0; r.append(f"{n_skewed} skewed features may violate linearity/normality assumptions")
+        if high_card_cats: s -= 1.2; r.append(f"{len(high_card_cats)} high-cardinality categorical column(s) need encoding first")
+        candidates.append(("Linear Regression", s, r or ["Standard interpretable baseline for this data shape"]))
 
-        # KNN Regressor
-        knn_s = 4 if (row_count < 2000 and not high_dim) else (2 if high_dim else 3)
-        knn_r = [f"{row_count:,} rows / {col_count} columns {'suits' if not high_dim else 'works against'} distance-based methods"]
-        if high_dim: knn_r.append("high dimensionality dilutes distance metrics (curse of dimensionality)")
-        if cleanliness < 85: knn_s -= 1; knn_r.append("sensitive to the outliers still present")
-        recs.append({"name": "K-Nearest Neighbors Regressor", "stars": stars(knn_s), "reason": " · ".join(knn_r)})
+        s, r = 5.2, ["Like Linear Regression but regularized — more stable when features are correlated with each other"]
+        if high_card_cats: s -= 0.6; r.append(f"{len(high_card_cats)} high-cardinality categorical column(s) still need encoding first")
+        if top_corr > 0.4: s += 1.0; r.append(f"a real linear signal is present (max |r|={top_corr:.2f}) for the regularization to work with")
+        if col_count > 10: s += 0.6; r.append(f"{col_count} features — regularization helps most when there are several correlated predictors")
+        candidates.append(("Ridge Regression", s, r))
 
-        # Decision Tree Regressor
-        dt_s, dt_r = 3, ["Fast and directly interpretable — a good baseline to compare others against"]
-        if tiny_data: dt_s -= 1; dt_r.append(f"only {row_count} rows — a single tree overfits easily this small")
-        recs.append({"name": "Decision Tree Regressor", "stars": stars(dt_s), "reason": " · ".join(dt_r)})
+    else:  # clustering — only algorithm this platform offers is K-Means
+        s = 7.5
+        r = ["The only clustering algorithm available on this platform — no ground-truth target to compare alternatives against"]
+        if high_dim: s -= 0.8; r.append(f"{col_count} features — consider dimensionality reduction (PCA) first for cleaner clusters")
+        if cleanliness < 90: s -= 0.5; r.append(f"outliers still present ({100-cleanliness:.0f}% of rows) can pull centroids off-center")
+        candidates.append(("K-Means", s, r))
 
-        # SVR
-        svr_s = 3 + (1 if high_dim else 0) - (1 if large_data else 0)
-        svr_r = []
-        if high_dim: svr_r.append(f"{col_count} features — SVR is strong in high-dimensional spaces")
-        if large_data: svr_r.append(f"{row_count:,} rows will make training noticeably slower")
-        if avg_corr > 0: svr_r.append(f"average feature-target correlation is {avg_corr:.2f}")
-        recs.append({"name": "Support Vector Regression (SVR)", "stars": stars(svr_s),
-                     "reason": " · ".join(svr_r) or "Solid general-purpose choice for this dataset size"})
+    if not candidates:
+        return []
 
-    return sorted(recs, key=lambda x: -x["stars"])
+    best_score = max(c[1] for c in candidates)
+    # Stars drop by 1 for every ~1.4-point gap below the best score — wide
+    # enough that a genuinely clear best fit reads as clearly best (5 stars,
+    # next candidate several points back lands at 3-4), but two candidates
+    # that are honestly close in fit both still land near the top rather
+    # than an arbitrary tie-break faking a difference that isn't real.
+    GAP_PER_STAR = 1.0
+    recs = []
+    for name, score, reason_parts in candidates:
+        gap = max(0.0, best_score - score)
+        star_ct = max(1, min(5, 5 - int(gap // GAP_PER_STAR)))
+        # Only the single actual best-scoring candidate keeps 5 stars — a
+        # near-tie a fraction of a point behind is a strong second choice,
+        # not an equally-best pick, and the frontend's AlgoTable already
+        # highlights exactly the 5-star row(s) as "Recommended". Without
+        # this cap, several candidates with genuinely close (but not
+        # identical) scores all landed on 5 stars — confirmed live on a
+        # real dataset (XGBoost/Random Forest/KNN all hit 5★ together) —
+        # which is exactly the "same recommended stars for every model"
+        # flatness the star system exists to avoid.
+        if score < best_score:
+            star_ct = min(star_ct, 4)
+        recs.append((star_ct, score, {"name": name, "stars": star_ct, "reason": " · ".join(reason_parts)}))
+
+    recs.sort(key=lambda x: (-x[0], -x[1]))
+    return [rec for _, _, rec in recs]
 
 def compute_class_histograms(df, target, ft_corr, n_features=6):
     """Per-class histogram data for the top N most correlated features. Only
@@ -412,6 +460,27 @@ def compute_per_col_histograms(df_curr, df_orig=None, n_bins=25):
     an entry; a genuinely-empty-or-constant one gets empty counts/bin_mids
     so the frontend can render an explicit "No variation to display" card
     instead of a silent gap.
+
+    Bin RANGE is always this column's OWN raw [min, max] — computed fresh,
+    independently, inside this loop, from `curr` (this column's own
+    dropna'd values) and nothing else. There is no shared/fixed range
+    across columns; there never was one in this function (a `MiniHistogram`
+    card with a "2 to 24"-looking range in the UI was always THAT column's
+    own true min/max, coincidentally, not a hardcoded constant anywhere in
+    this file). An earlier revision of this function clipped each column's
+    range to Tukey IQR fences to keep a few extreme outliers from crushing
+    the rest of a column's bars into one dominant bin — explicitly reverted
+    per the user's direct instruction: every value must land in a bin
+    computed from that column's OWN true min/max, with nothing outside that
+    range clipped, hidden, or folded into an edge bin. `np.histogram`
+    against `[curr.min(), curr.max()]` inherently satisfies that — no value
+    can ever fall outside a range built from its own min/max, so no
+    clip/mask step is needed at all here. The visible trade-off, worth
+    knowing rather than silently reintroducing a "fix" for: a column with a
+    few extreme outliers WILL show most of its real bars compressed near
+    one edge, because the true range genuinely does span that far — this
+    is an accurate representation of the column's real distribution, by
+    the user's explicit request, not a bug.
     """
     result = {}
     for col in df_curr.select_dtypes(include=[np.number]).columns:
@@ -420,7 +489,8 @@ def compute_per_col_histograms(df_curr, df_orig=None, n_bins=25):
             if len(curr) < 2 or curr.nunique() < 2:
                 result[col] = {"current": {"counts": [], "bin_mids": []}}
                 continue
-            bins_edges = np.linspace(float(curr.min()), float(curr.max()), n_bins + 1)
+            lo, hi = float(curr.min()), float(curr.max())
+            bins_edges = np.linspace(lo, hi, n_bins + 1)
             counts, _ = np.histogram(curr, bins=bins_edges)
             entry = {
                 "current": {
@@ -432,6 +502,15 @@ def compute_per_col_histograms(df_curr, df_orig=None, n_bins=25):
             if df_orig is not None and col in df_orig.columns:
                 orig = df_orig[col].dropna()
                 if len(orig) > 0:
+                    # Binned against CURRENT's own [lo, hi] edges (not
+                    # original's own range) so the two series sit on one
+                    # shared, directly-comparable axis for the before/after
+                    # overlay — any original value outside current's range
+                    # (routine right after outlier removal, since original
+                    # legitimately had more extreme values before cleaning)
+                    # falls outside every bin and np.histogram simply won't
+                    # count it, matching the same "never invent a range
+                    # this data didn't actually produce" principle above.
                     orig_counts, _ = np.histogram(orig, bins=bins_edges)
                     entry["original"] = {
                         "counts": orig_counts.tolist(),
@@ -532,6 +611,12 @@ class AnalyzeReq(BaseModel):
     file_path:          str
     original_file_path: Optional[str] = None
     target_column:      Optional[str] = None
+    # The task type the user picked on Upload (classification/regression/
+    # clustering) — passed through explicitly so Algorithm Fit
+    # Recommendations are scoped to the RIGHT model list. Optional with a
+    # heuristic fallback (see analyze()) for any caller that doesn't send
+    # it yet, but every current frontend page does.
+    task_type:          Optional[str] = None
 
 class PCAReq(BaseModel):
     file_path:     str
@@ -599,10 +684,21 @@ def analyze(req: AnalyzeReq):
         signal = build_signal_assessment(df, target, ft_corr, fingerprint, skewed_curr)
 
         n_skewed = sum(1 for s in skewed_curr if s["severe"])
-        # A regression target still gets a real task_type even when it's
-        # numeric-but-not-classification-shaped; target_is_classification
-        # already encodes exactly that distinction (see its own docstring).
-        algo_recs = build_algo_recs(df, "classification" if target_is_classification else "regression",
+        # Algorithm Fit Recommendations must be scoped to the task type the
+        # user actually picked on Upload — req.task_type is authoritative
+        # when the frontend sends it. Falls back to the old heuristic
+        # (target-shape-based classification/regression guess) only when it
+        # doesn't, which is also the only path that can never produce
+        # "clustering" — a real bug this replaces: with no task_type sent,
+        # a clustering dataset (no target column at all) used to silently
+        # fall into the regression branch and recommend Linear Regression/
+        # Ridge/etc. for a K-Means run, which made no sense at all.
+        valid_task_types = {"classification", "regression", "clustering"}
+        if req.task_type in valid_task_types:
+            algo_task_type = req.task_type
+        else:
+            algo_task_type = "classification" if target_is_classification else "regression"
+        algo_recs = build_algo_recs(df, algo_task_type,
                                     len(df), len(df.columns), is_balanced,
                                     n_skewed, ft_corr, fingerprint)
 
@@ -660,6 +756,7 @@ def analyze(req: AnalyzeReq):
             "target_quality":      target_quality,
             "signal":              signal,
             "algorithm_recs":      algo_recs,
+            "algorithm_recs_task_type": algo_task_type,
             "target_column":       target,
             "target_is_classification": target_is_classification,
         }

@@ -807,7 +807,7 @@ export default function FeatureSelectionPage({
       if (registerVersion)
         await registerVersion('feature_selection', res.new_file_path, 'Feature Selected Version', res.row_count,
           { features_kept: res.features_kept, features_dropped: res.features_dropped })
-      if (onUpdateData) onUpdateData({ cleanedFilePath: res.new_file_path })
+      if (onUpdateData) onUpdateData({ cleanedFilePath: res.new_file_path, selectedFeatures: res.features_kept })
       // Real bug, fixed: re-analyze the JUST-APPLIED file and replace `data`
       // with it — without this, the entire rest of the page (heatmap,
       // importance chart, redundancy scatter, feature table) kept showing

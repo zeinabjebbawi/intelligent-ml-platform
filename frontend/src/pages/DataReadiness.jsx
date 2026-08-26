@@ -715,6 +715,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
       file_path:          filePath,
       original_file_path: origPath && origPath !== filePath ? origPath : null,
       target_column:      projectData?.targetColumn || null,
+      task_type:          projectData?.taskType || null,
     })
     .then(setData)
     .catch(e => setError(e.message))
@@ -797,7 +798,8 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   if (!data) return null
 
   const { current, original, class_histograms: classHists,
-          fingerprint, signal, algorithm_recs: algoRecs, target_quality: targetQuality } = data
+          fingerprint, signal, algorithm_recs: algoRecs,
+          algorithm_recs_task_type: algoTaskType, target_quality: targetQuality } = data
 
   const numCols = current?.numeric_cols || []
 
@@ -1097,42 +1099,12 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
         <Section id="quality" icon="✓" accent={C.success}
           label="Quality Confirmation"
           sub="Final verification that preprocessing achieved its goals">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 16 }}>
-            <ChartCard title="Missing Values — Final State"
-              sub="Green = 0 missing (target). Any red bar = a column still needs imputation.">
-              {(() => {
-                const d = Object.entries(current.missing_per_col)
-                  .map(([col, n]) => ({ col: col.length > 14 ? col.slice(0,12)+'…' : col, count: n }))
-                const hasAny = d.some(x => x.count > 0)
-                if (!hasAny) return (
-                  <div style={{ textAlign: 'center', padding: '30px 0' }}>
-                    <div style={{ fontSize: 36, marginBottom: 6 }}>✓</div>
-                    <div style={{ fontWeight: 700, color: C.success, fontSize: 14 }}>
-                      Dataset is 100% complete
-                    </div>
-                    <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
-                      Zero missing values remain across all columns.
-                    </div>
-                  </div>
-                )
-                return (
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={d} layout="vertical" margin={{ left: 90 }}>
-                      <XAxis type="number" tick={{ fontSize: 10 }} />
-                      <YAxis dataKey="col" type="category" tick={{ fontSize: 10 }} width={90} />
-                      <Tooltip />
-                      <Bar dataKey="count" radius={[0,3,3,0]}>
-                        {d.map((x, i) => (
-                          <Cell key={i} fill={x.count === 0 ? C.success : C.danger} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                )
-              })()}
-            </ChartCard>
-            {/* Skewness moved HERE from Before vs After (see Section B) —
-                sits beside Anomaly Score as originally requested. */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+            {/* Missing Values — Final State was removed from here: it's
+                already shown as "Missing Values — Before & After" in
+                Section B above, so a second copy here was pure duplication
+                on the same page. Skewness + Anomaly Score now fill the
+                50/50 row on their own. */}
             <ChartCard title="Skewness After Preprocessing"
               sub="Amber dashed = |skew|=1 threshold. Features still above this may affect linear models.">
               <SkewnessChart current={current.skewness} original={original?.skewness} />
@@ -1187,8 +1159,9 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
             </div>
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
               Rule-based guidance only — based on THIS dataset's actual size, balance, skewness, and
-              correlation strength, and scoped to {data.target_is_classification === false ? 'regression' : 'classification'} algorithms
-              since that's the task type set on the Upload page. No model has been trained yet.
+              correlation strength, scoped to {algoTaskType || 'classification'} algorithms since that's
+              the task type set on the Upload page. Only algorithms available on the Train and Test page
+              are shown, and the single best fit is starred highest. No model has been trained yet.
             </div>
             <AlgoTable recs={algoRecs} />
           </div>
