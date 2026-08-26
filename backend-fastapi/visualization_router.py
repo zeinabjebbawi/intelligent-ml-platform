@@ -448,8 +448,70 @@ def compute_class_histograms(df, target, ft_corr, n_features=6):
     except Exception:
         return {}
 
-def compute_per_col_histograms(df_curr, df_orig=None, n_bins=25):
+def compute_robust_hist_bins(values):
+    """Direct Python port of frontend/src/pages/Diagnose.jsx's computeHistBins
+    — that per-column histogram is the one confirmed to render correctly, so
+    this page's histogram is rebuilt to produce IDENTICAL bin edges/counts
+    for the same data rather than the old, unrelated min/max-linspace
+    approach. Range is the tighter of the Tukey IQR fence (Q1-1.5*IQR to
+    Q3+1.5*IQR) and the 1st/99th percentiles, so a handful of extreme
+    outliers can no longer stretch the range so far that every normal value
+    collapses into one dominant bin. Bin count is data-driven (Freedman-
+    Diaconis, Sturges' rule fallback when IQR==0), clamped to [8, 40].
+    Every value is still counted — nothing is dropped — values beyond the
+    robust range are folded into the nearest edge bin, standard practice for
+    a clipped histogram, so total counts always sum to len(values).
+    Returns (bins, (lo, hi)) where bins is [{"mid":, "count":}, ...].
+    """
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    if n == 0:
+        return [], (0.0, 0.0)
+    sorted_v = np.sort(values)
+    data_min, data_max = float(sorted_v[0]), float(sorted_v[-1])
+    if data_min == data_max:
+        return [{"mid": data_min, "count": n}], (data_min, data_max)
+
+    def quantile(p):
+        idx = (n - 1) * p
+        lo_i, hi_i = int(np.floor(idx)), int(np.ceil(idx))
+        if lo_i == hi_i:
+            return float(sorted_v[lo_i])
+        return float(sorted_v[lo_i] + (sorted_v[hi_i] - sorted_v[lo_i]) * (idx - lo_i))
+
+    q1, q3 = quantile(0.25), quantile(0.75)
+    iqr = q3 - q1
+
+    lo, hi = data_min, data_max
+    if iqr > 0:
+        lo = max(data_min, q1 - 1.5 * iqr)
+        hi = min(data_max, q3 + 1.5 * iqr)
+    lo = max(lo, quantile(0.01))
+    hi = min(hi, quantile(0.99))
+    if hi <= lo:
+        lo, hi = data_min, data_max
+
+    if iqr > 0:
+        bin_width = 2 * iqr * (n ** (-1 / 3))
+        num_bins = round((hi - lo) / bin_width) if bin_width > 0 else 20
+    else:
+        num_bins = round(np.log2(n) + 1)
+    num_bins = max(8, min(40, num_bins or 20))
+
+    size = (hi - lo) / num_bins
+    counts = [0] * num_bins
+    for v in values:
+        clamped = min(max(v, lo), hi)
+        idx = max(0, min(int((clamped - lo) / size), num_bins - 1))
+        counts[idx] += 1
+    bin_mids = [round(lo + (i + 0.5) * size, 3) for i in range(num_bins)]
+    return [{"mid": m, "count": c} for m, c in zip(bin_mids, counts)], (lo, hi)
+
+
+def compute_per_col_histograms(df_curr, df_orig=None):
     """Histogram bins for every numeric column — current + original if provided.
+    Uses compute_robust_hist_bins (see above) for both, so this page's
+    histograms are pixel-for-pixel the same shape as Diagnose.jsx's own.
 
     A column with zero variance (constant, or all-NaN) used to be silently
     OMITTED from the result dict via `continue` — the frontend's
@@ -460,27 +522,6 @@ def compute_per_col_histograms(df_curr, df_orig=None, n_bins=25):
     an entry; a genuinely-empty-or-constant one gets empty counts/bin_mids
     so the frontend can render an explicit "No variation to display" card
     instead of a silent gap.
-
-    Bin RANGE is always this column's OWN raw [min, max] — computed fresh,
-    independently, inside this loop, from `curr` (this column's own
-    dropna'd values) and nothing else. There is no shared/fixed range
-    across columns; there never was one in this function (a `MiniHistogram`
-    card with a "2 to 24"-looking range in the UI was always THAT column's
-    own true min/max, coincidentally, not a hardcoded constant anywhere in
-    this file). An earlier revision of this function clipped each column's
-    range to Tukey IQR fences to keep a few extreme outliers from crushing
-    the rest of a column's bars into one dominant bin — explicitly reverted
-    per the user's direct instruction: every value must land in a bin
-    computed from that column's OWN true min/max, with nothing outside that
-    range clipped, hidden, or folded into an edge bin. `np.histogram`
-    against `[curr.min(), curr.max()]` inherently satisfies that — no value
-    can ever fall outside a range built from its own min/max, so no
-    clip/mask step is needed at all here. The visible trade-off, worth
-    knowing rather than silently reintroducing a "fix" for: a column with a
-    few extreme outliers WILL show most of its real bars compressed near
-    one edge, because the true range genuinely does span that far — this
-    is an accurate representation of the column's real distribution, by
-    the user's explicit request, not a bug.
     """
     result = {}
     for col in df_curr.select_dtypes(include=[np.number]).columns:
@@ -489,31 +530,34 @@ def compute_per_col_histograms(df_curr, df_orig=None, n_bins=25):
             if len(curr) < 2 or curr.nunique() < 2:
                 result[col] = {"current": {"counts": [], "bin_mids": []}}
                 continue
-            lo, hi = float(curr.min()), float(curr.max())
-            bins_edges = np.linspace(lo, hi, n_bins + 1)
-            counts, _ = np.histogram(curr, bins=bins_edges)
+            bins, (lo, hi) = compute_robust_hist_bins(curr.values)
             entry = {
                 "current": {
-                    "counts": counts.tolist(),
-                    "bin_mids": [round(float((bins_edges[i]+bins_edges[i+1])/2), 3)
-                                 for i in range(len(counts))],
+                    "counts": [b["count"] for b in bins],
+                    "bin_mids": [b["mid"] for b in bins],
                 }
             }
             if df_orig is not None and col in df_orig.columns:
                 orig = df_orig[col].dropna()
                 if len(orig) > 0:
-                    # Binned against CURRENT's own [lo, hi] edges (not
+                    # Binned against CURRENT's own [lo, hi]/bin count (not
                     # original's own range) so the two series sit on one
                     # shared, directly-comparable axis for the before/after
-                    # overlay — any original value outside current's range
+                    # overlay. Any original value outside current's range
                     # (routine right after outlier removal, since original
                     # legitimately had more extreme values before cleaning)
-                    # falls outside every bin and np.histogram simply won't
-                    # count it, matching the same "never invent a range
-                    # this data didn't actually produce" principle above.
-                    orig_counts, _ = np.histogram(orig, bins=bins_edges)
+                    # is folded into the nearest edge bin — same "count
+                    # every value, never drop one" rule as compute_robust_
+                    # hist_bins itself.
+                    num_bins = len(bins)
+                    size = (hi - lo) / num_bins
+                    orig_counts = [0] * num_bins
+                    for v in orig.values:
+                        clamped = min(max(float(v), lo), hi)
+                        idx = max(0, min(int((clamped - lo) / size), num_bins - 1))
+                        orig_counts[idx] += 1
                     entry["original"] = {
-                        "counts": orig_counts.tolist(),
+                        "counts": orig_counts,
                         "bin_mids": entry["current"]["bin_mids"],
                     }
             result[col] = entry

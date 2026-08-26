@@ -308,16 +308,25 @@ const MiniHistogram = ({ col, histEntry, diagnostic, showOriginal }) => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
         <div style={{ fontWeight: 700, fontSize: 11, color: C.text, wordBreak: 'break-word' }}>{col}</div>
         <div style={{ fontSize: 8, fontWeight: 700, padding: '1px 5px', borderRadius: 5,
-          background: `${badgeColor}18`, color: badgeColor, flexShrink: 0, marginLeft: 4 }}>
-          {diagnostic?.title?.slice(0,8) || 'OK'}
+          background: `${badgeColor}18`, color: badgeColor, flexShrink: 0, marginLeft: 4, whiteSpace: 'nowrap' }}>
+          {diagnostic?.title || 'OK'}
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={70}>
-        {/* barSize widened slightly (was auto/undefined — bars read as too
-            thin to see clearly) and the "original" overlay recolored from
-            grey to red, per explicit request, so it reads as a distinct
-            reference series rather than a washed-out background. */}
-        <BarChart data={data} margin={{ top: 0, right: 0, bottom: 0, left: -20 }} barSize={5}>
+      {/* Same chart shape as Diagnose.jsx's own per-column MiniHistogram
+          (real XAxis/YAxis showing actual values, CartesianGrid) — this
+          page's version previously had no axis at all, so bin positions
+          only ever meant anything via the tooltip. barGap=-barSize collapses
+          Recharts' default side-by-side grouping of the two Bar series so
+          they sit at the exact same x position: without it, "original" and
+          "current" render next to each other (and can visually collide/hide
+          one another at this bar width) instead of the intended semi-
+          transparent overlay — original (taller, pre-cleaning) visible
+          behind current wherever it exceeds current's height. */}
+      <ResponsiveContainer width="100%" height={90}>
+        <BarChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 0 }} barSize={5} barGap={-5}>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
+          <XAxis dataKey="mid" tick={{ fontSize: 8, fill: C.muted }} tickFormatter={v => Number(v).toFixed(1)} />
+          <YAxis tick={{ fontSize: 8, fill: C.muted }} width={24} />
           {showOriginal && histEntry.original && (
             <Bar dataKey="original" fill={C.danger} opacity={0.6} radius={[1,1,0,0]} />
           )}
