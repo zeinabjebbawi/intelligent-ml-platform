@@ -13,7 +13,7 @@ export function getBalanceLevelConfig(C) {
   return {
     balanced:  { label: 'Balanced',   color: C.success },
     mild:      { label: 'Mild Imb.',  color: '#84cc16' },
-    moderate:  { label: 'Moderate',   color: C.warning },
+    moderate:  { label: 'High',       color: C.warning },
     severe:    { label: 'Severe',     color: C.danger },
     invalid:   { label: 'Invalid',    color: C.muted },
     no_target: { label: 'No Target',  color: C.muted },
