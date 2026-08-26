@@ -341,58 +341,6 @@ const MiniHistogram = ({ col, histEntry, diagnostic, showOriginal }) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLASS-CONDITIONAL OVERLAY — density curves per feature, one per class
-// ─────────────────────────────────────────────────────────────────────────────
-const ClassOverlayChart = ({ col, classHistData }) => {
-  const { C } = useTheme()
-  if (!classHistData) return null
-  const clsKeys = Object.keys(classHistData)
-  if (clsKeys.length === 0) return null
-  const firstBins = classHistData[clsKeys[0]].bin_mids
-  const data = firstBins.map((mid, i) => {
-    const row = { mid }
-    clsKeys.forEach(cls => {
-      row[`class_${cls}`] = classHistData[cls].counts[i] || 0
-    })
-    return row
-  })
-
-  return (
-    <div style={{ background: C.card, borderRadius: 12, padding: '12px 14px',
-      border: `1px solid ${C.border}`, boxShadow: shadow2 }}>
-      <div style={{ fontWeight: 700, fontSize: 11, color: C.text, marginBottom: 6 }}>{col}</div>
-      <ResponsiveContainer width="100%" height={100}>
-        <AreaChart data={data} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
-          <CartesianGrid strokeDasharray="2 2" stroke={C.faint} />
-          <XAxis dataKey="mid" tick={{ fontSize: 8 }} tickCount={4}
-            tickFormatter={v => Number(v).toFixed(0)} />
-          <YAxis tick={{ fontSize: 8 }} />
-          <Tooltip contentStyle={{ fontSize: 10 }} />
-          {clsKeys.map((cls, ci) => (
-            <Area key={cls}
-              dataKey={`class_${cls}`}
-              name={`Class ${cls}`}
-              stroke={CLASS_COLORS[ci % CLASS_COLORS.length]}
-              fill={CLASS_COLORS[ci % CLASS_COLORS.length]}
-              fillOpacity={0.2}
-              strokeWidth={1.5}
-            />
-          ))}
-        </AreaChart>
-      </ResponsiveContainer>
-      <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
-        {clsKeys.map((cls, ci) => (
-          <div key={cls} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9 }}>
-            <div style={{ width: 10, height: 3, background: CLASS_COLORS[ci % CLASS_COLORS.length], borderRadius: 2 }} />
-            <span style={{ color: C.muted }}>Class {cls}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // SKEWNESS COMPARISON CHART — now lives in the Quality section (moved from
 // Before vs After, which shows class distribution instead — see Section C).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -722,7 +670,17 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
     setLoading(true)
     callViz('analyze', {
       file_path:          filePath,
-      original_file_path: origPath && origPath !== filePath ? origPath : null,
+      // Real bug, fixed: this used to be `origPath && origPath !== filePath
+      // ? origPath : null` — withholding the original file entirely
+      // whenever nothing had changed it yet (e.g. arriving here straight
+      // from Cleaning without ever running "Remove Missing Values"). The
+      // backend then has no `original_file_path` to read, so `original` in
+      // its response is `null`, and the Missing Values Before/After chart's
+      // `origMiss[c] || 0` fallback makes every "Before" bar show 0 — wrong
+      // whenever the real original dataset actually had missing values.
+      // Always send it when it exists; the backend reading the same file
+      // twice when nothing's changed yet is a trivial cost, not a bug.
+      original_file_path: origPath || null,
       target_column:      projectData?.targetColumn || null,
       task_type:          projectData?.taskType || null,
     })
@@ -806,7 +764,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   )
   if (!data) return null
 
-  const { current, original, class_histograms: classHists,
+  const { current, original,
           fingerprint, signal, algorithm_recs: algoRecs,
           algorithm_recs_task_type: algoTaskType, target_quality: targetQuality } = data
 
@@ -937,8 +895,17 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
                       <XAxis type="number" tick={{ fontSize: 10 }} />
                       <YAxis dataKey="col" type="category" tick={{ fontSize: 10 }} width={80} />
                       <Tooltip />
-                      <Bar dataKey="before" name="Before" fill={C.danger} radius={[0,3,3,0]} />
-                      <Bar dataKey="after" name="After" fill={C.success} radius={[0,3,3,0]} opacity={0.8} />
+                      {/* minPointSize renders a small non-zero stub for a
+                          literal 0 value — without it a fully-cleaned
+                          column's "After" bar has 0 width and is
+                          indistinguishable from that column not being
+                          plotted at all. This is exactly the case that
+                          matters most here: after "Remove Missing Values"
+                          runs, every After bar SHOULD be 0, and that's the
+                          one result the user most needs to visually confirm
+                          actually happened, not just infer from its absence. */}
+                      <Bar dataKey="before" name="Before" fill={C.danger} radius={[0,3,3,0]} minPointSize={3} />
+                      <Bar dataKey="after" name="After" fill={C.success} radius={[0,3,3,0]} opacity={0.8} minPointSize={3} />
                     </BarChart>
                   </ResponsiveContainer>
                 )
@@ -967,23 +934,6 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
                 showOriginal={showOriginalDist} />
             ))}
           </div>
-
-          {classHists && Object.keys(classHists).length > 0 && (
-            <>
-              <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 12 }}>
-                Class-Conditional Distributions (top correlated features)
-              </div>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
-                Separated distributions per class — features with minimal overlap between classes contribute more to model discrimination.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
-                {Object.keys(classHists).map(col => (
-                  <ClassOverlayChart key={col} col={col}
-                    classHistData={classHists[col]} />
-                ))}
-              </div>
-            </>
-          )}
         </Section>
 
         {/* ── D. Separability Check ───────────────────────────────────────── */}

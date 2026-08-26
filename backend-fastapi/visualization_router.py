@@ -408,46 +408,6 @@ def build_algo_recs(df, task_type, row_count, col_count, is_balanced, n_skewed, 
     recs.sort(key=lambda x: (-x[0], -x[1]))
     return [rec for _, _, rec in recs]
 
-def compute_class_histograms(df, target, ft_corr, n_features=6):
-    """Per-class histogram data for the top N most correlated features. Only
-    meaningful for a discrete/classification-shaped target — a continuous
-    regression target would produce one "class" per unique value, which is
-    both meaningless and slow, so the caller gates this on
-    is_classification_target() before calling."""
-    if not ft_corr or target not in df.columns:
-        return {}
-    try:
-        top_features = [x["feature"] for x in ft_corr[:n_features]]
-        classes = df[target].dropna().unique()
-        result = {}
-        for feat in top_features:
-            try:
-                if feat not in df.columns:
-                    continue
-                all_vals = df[feat].dropna()
-                if len(all_vals) == 0:
-                    continue
-                mn, mx = float(all_vals.min()), float(all_vals.max())
-                if mn == mx:
-                    continue
-                bins_edges = np.linspace(mn, mx, 20)
-                feat_result = {}
-                for cls in classes:
-                    subset = df[df[target] == cls][feat].dropna()
-                    counts, _ = np.histogram(subset, bins=bins_edges)
-                    feat_result[str(cls)] = {
-                        "counts": counts.tolist(),
-                        "bin_edges": [round(float(b), 3) for b in bins_edges],
-                        "bin_mids":  [round(float((bins_edges[i]+bins_edges[i+1])/2), 3)
-                                      for i in range(len(counts))],
-                    }
-                result[feat] = feat_result
-            except Exception:
-                continue
-        return result
-    except Exception:
-        return {}
-
 def compute_robust_hist_bins(values):
     """Direct Python port of frontend/src/pages/Diagnose.jsx's computeHistBins
     — that per-column histogram is the one confirmed to render correctly, so
@@ -705,7 +665,6 @@ def analyze(req: AnalyzeReq):
         class_orig = class_distribution(df_orig, target) if (df_orig is not None and target_is_classification) else []
 
         hist_data = compute_per_col_histograms(df, df_orig)
-        class_hists = compute_class_histograms(df, target, ft_corr) if target_is_classification else {}
         diagnostics = {col: run_diagnostics(df[col], col) for col in df.columns}
 
         miss_curr = {col: int(df[col].isna().sum()) for col in df.columns}
@@ -795,7 +754,6 @@ def analyze(req: AnalyzeReq):
                 "iso_scores":    iso_scores_orig,
             } if df_orig is not None else None,
             "feature_target_corr": ft_corr,
-            "class_histograms":    class_hists,
             "fingerprint":         fingerprint,
             "target_quality":      target_quality,
             "signal":              signal,
