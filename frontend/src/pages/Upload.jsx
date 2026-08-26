@@ -2,8 +2,11 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
 
-const shadow = '0 4px 24px rgba(0,0,0,0.10)'
-const shadow2 = '0 1px 4px rgba(0,0,0,0.08)'
+// Matches Encoding.jsx's shadow/border-radius conventions exactly (not the
+// slightly-different values a prior styling pass approximated), per the
+// explicit "same card borders and button shadows as Encoding.jsx" request.
+const shadow = '0 4px 24px rgba(0,0,0,0.18)'
+const shadow2 = '0 1px 4px rgba(0,0,0,0.12)'
 const btn = (bg, color = 'white', extra = {}) => ({
   padding: '9px 20px', borderRadius: 10, border: 'none',
   background: bg, color, fontWeight: 700, fontSize: 13,
@@ -830,22 +833,23 @@ function PreviewTable({ columns, rows, target, C }) {
 function StepIndicator({ step, C }) {
   const steps = [1, 2, 3]
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 24 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '16px 28px', borderBottom: `1px solid ${C.border}` }}>
       {steps.map((n, i) => {
         const done = n < step, active = n === step
         return (
           <div key={n} style={{ display: 'flex', alignItems: 'center', flex: i < steps.length - 1 ? 1 : 'initial' }}>
             <div style={{
               width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', fontSize: 12, fontWeight: 800, flexShrink: 0,
+              justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0,
               background: done ? C.success : active ? C.primary : C.light,
               color: done || active ? 'white' : C.muted,
-              border: done || active ? 'none' : `1.5px solid ${C.border}`,
+              border: done || active ? 'none' : `1px solid ${C.border}`,
+              boxShadow: active ? `0 2px 8px ${C.primary}44` : 'none',
             }}>
               {done ? '✓' : n}
             </div>
             {i < steps.length - 1 && (
-              <div style={{ flex: 1, height: 2, background: n < step ? C.success : C.border, margin: '0 6px' }} />
+              <div style={{ flex: 1, height: 1, background: n < step ? C.success : C.border, margin: '0 6px' }} />
             )}
           </div>
         )
@@ -858,19 +862,19 @@ function ChoiceCard({ icon, title, subtitle, tag, selected, onClick, C }) {
   return (
     <div onClick={onClick} className="prism-choice-card"
       style={{
-        position: 'relative', border: `1.5px solid ${selected ? C.primary : C.border}`,
+        position: 'relative', border: `${selected ? 2 : 1.5}px solid ${selected ? C.primary : C.border}`,
         background: selected ? C.primarySoft : C.card, borderRadius: 14,
         padding: '18px 20px', cursor: 'pointer', transition: 'all 0.15s',
         boxShadow: selected ? `0 0 0 3px ${C.primary}22` : shadow2,
       }}>
       {selected && (
         <span style={{
-          position: 'absolute', top: 14, right: 14, width: 22, height: 22, borderRadius: '50%',
-          background: C.primary, color: 'white', fontSize: 12, fontWeight: 900,
+          position: 'absolute', top: 12, right: 12, width: 22, height: 22, borderRadius: '50%',
+          background: C.primary, color: 'white', fontSize: 11, fontWeight: 900,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>✓</span>
       )}
-      <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+      <div style={{ fontSize: 24, marginBottom: 8 }}>{icon}</div>
       <div style={{ fontWeight: 800, fontSize: 15, color: C.text, marginBottom: 4 }}>{title}</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>{subtitle}</div>
       <Pill label={tag} tone={tag.includes('Unsupervised') ? 'regression' : 'classification'} C={C} />
@@ -977,7 +981,7 @@ function DatasetSetupDrawer({
     <div style={{
       position: 'fixed', top: 0, right: 0, width: '50%', minWidth: 420, height: '100vh',
       background: C.card, borderLeft: `1px solid ${C.border}`,
-      boxShadow: '-8px 0 30px rgba(0,0,0,0.16)', zIndex: 500,
+      boxShadow: '-8px 0 32px rgba(0,0,0,0.08)', zIndex: 500,
       transform: open ? 'translateX(0)' : 'translateX(100%)',
       transition: 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
       display: 'flex', flexDirection: 'column',
@@ -995,15 +999,17 @@ function DatasetSetupDrawer({
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '20px 28px', borderBottom: `1px solid ${C.border}`, flexShrink: 0,
       }}>
-        <div style={{ fontSize: 15, fontWeight: 900, color: C.text }}>Dataset Setup</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>Dataset Setup</div>
         <button onClick={onClose} style={{
-          background: C.light, border: 'none', borderRadius: 8, width: 30, height: 30,
+          background: C.light, border: 'none', borderRadius: 8, width: 32, height: 32,
           cursor: 'pointer', color: C.muted, fontSize: 14,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>✕</button>
       </div>
 
+      <StepIndicator step={setupStep} C={C} />
+
       <div style={{ padding: '24px 28px', overflowY: 'auto', flex: 1 }}>
-        <StepIndicator step={setupStep} C={C} />
 
         <div key={setupStep} style={{ animation: 'stepIn 0.25s ease-out' }}>
           {/* ── STEP 1 ── */}
@@ -1179,9 +1185,9 @@ function DatasetSetupDrawer({
 
               <button onClick={onConfirm}
                 style={{
-                  width: '100%', marginTop: 22, background: C.primary, color: 'white', fontWeight: 800,
+                  width: '100%', marginTop: 22, background: C.success, color: 'white', fontWeight: 800,
                   padding: 14, borderRadius: 12, fontSize: 15, border: 'none', cursor: 'pointer',
-                  boxShadow: '0 6px 20px rgba(99,102,241,0.35)',
+                  boxShadow: `0 6px 20px ${C.success}44`,
                 }}>
                 Confirm & Start Diagnosis →
               </button>
@@ -1196,11 +1202,18 @@ function DatasetSetupDrawer({
           borderTop: `1px solid ${C.border}`, flexShrink: 0,
         }}>
           <button onClick={goBack} disabled={setupStep === 1}
-            style={btn(C.light, C.muted, { opacity: setupStep === 1 ? 0.4 : 1, cursor: setupStep === 1 ? 'default' : 'pointer' })}>
+            style={btn(C.card, C.muted, {
+              border: `1px solid ${C.border}`, padding: '10px 20px', borderRadius: 9,
+              opacity: setupStep === 1 ? 0.4 : 1, cursor: setupStep === 1 ? 'default' : 'pointer',
+            })}>
             ← Back
           </button>
           <button onClick={goNext} disabled={!canGoNext}
-            style={btn(C.primary, 'white', { opacity: canGoNext ? 1 : 0.4, cursor: canGoNext ? 'pointer' : 'default', padding: '10px 26px' })}>
+            style={btn(C.primary, 'white', {
+              padding: '11px 26px', borderRadius: 10,
+              boxShadow: canGoNext ? `0 6px 20px ${C.primary}44` : 'none',
+              opacity: canGoNext ? 1 : 0.4, cursor: canGoNext ? 'pointer' : 'default',
+            })}>
             Next →
           </button>
         </div>
@@ -1325,9 +1338,13 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
       <TopNav active={active || 'upload'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
       <div style={{ maxWidth: 1000, margin: '0 auto', padding: '28px 32px 64px' }}>
 
-        {/* Two-column region: left content dims when drawer is open */}
+        {/* Two-column region: left content dims when drawer is open, and
+            stops accepting clicks so nothing behind the (visible, not
+            covered by any overlay) drawer can be accidentally interacted
+            with while it's open. */}
         <div style={{
-          opacity: drawerOpen ? 0.6 : 1, transition: 'opacity 0.3s ease',
+          opacity: drawerOpen ? 0.6 : 1, pointerEvents: drawerOpen ? 'none' : 'auto',
+          transition: 'opacity 0.3s ease',
           marginRight: drawerOpen ? '52%' : 0,
           transitionProperty: 'opacity, margin-right',
           transitionDuration: '0.3s, 0.35s',
