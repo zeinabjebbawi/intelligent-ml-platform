@@ -72,34 +72,18 @@ function analyzeColumns(columns, rows) {
   return info
 }
 
-const TARGET_HINTS = ['target', 'label', 'class', 'outcome', 'diagnosis', 'species', 'medv', 'y']
-function suggestTarget(columns, columnsInfo) {
-  const hinted = columns.find(c => TARGET_HINTS.some(h => c.toLowerCase().includes(h)))
-  if (hinted) return hinted
-  // Fallback: prefer the last low-cardinality column (reads like a label);
-  // otherwise just the last column — same "some default beats none" logic
-  // used elsewhere in this platform (e.g. cleaning_router_v2's method defaults).
-  const lowCard = [...columns].reverse().find(c => columnsInfo[c] && columnsInfo[c].unique <= 20)
-  return lowCard || columns[columns.length - 1]
-}
-
-// Level-2 rule-based estimate (Global Rule 1) derived purely from this page's
-// own data (Global Rule 2 — no reaching into Diagnose/Training results).
-function computeTaskConfidence(rows, columnsInfo, target) {
-  const info = columnsInfo[target]
-  if (!info || !rows.length) return { classification: 50, regression: 50 }
-  const uniqueRatio = info.unique / rows.length
-  if (!info.isNumeric) {
-    return {
-      classification: 96,
-      regression: Math.round(Math.max(2, Math.min(25, uniqueRatio * 40))),
-    }
-  }
-  return {
-    classification: Math.round(Math.max(4, Math.min(96, (1 - uniqueRatio) * 100))),
-    regression: Math.round(Math.max(4, Math.min(96, uniqueRatio * 140))),
-  }
-}
+// NOTE: there used to be a suggestTarget()/computeTaskConfidence() pair here
+// that guessed a target column and rendered a "Problem Type: Classification
+// 96% / Regression 4%" confidence widget on THIS page, before the user had
+// picked anything. That's scientifically backwards — a dataset isn't
+// classification or regression, a PREDICTION PROBLEM is, and no such problem
+// exists until a target column is chosen. Worse, the guess frequently landed
+// on a non-numeric column, and computeTaskConfidence hardcoded classification
+// to a flat 96 whenever that happened — which is exactly why the number
+// never seemed to change across different datasets. Removed entirely: no
+// column is highlighted as a "suggested" target, and no task-type confidence
+// is shown, until the user explicitly picks a target in the Dataset Setup
+// drawer (see suggestTaskType below, and DatasetSetupDrawer's Step 2).
 
 // Deliberately smaller than Diagnose's full health score (Global Rule 2:
 // this page must not pre-empt that stage) but still needs to react to more
@@ -141,14 +125,84 @@ function computeMiniHealth(rows, columns, columnsInfo) {
   return Math.round(Math.max(0, Math.min(100, completeness * 0.5 + dupScore * 0.25 + outlierScore * 0.25)))
 }
 
-function detectTaskType(col, rows) {
+// Task-type SUGGESTION — only ever called AFTER the user explicitly picks a
+// target column in the drawer (never to pre-suggest a target column itself).
+// Called "suggested", never "detected": this is a rule-based guess, not a
+// fact, and it must never silently change once shown — if the user then
+// clicks the override buttons, that changes what will actually be USED
+// (finalTask), but the ORIGINAL suggestion stays exactly as first computed
+// so the user can always see what the platform actually suggested versus
+// what they chose instead. Uses cardinality
+// RATIO (unique values / total rows), not just an absolute unique count: a
+// column with 43 unique values is "clearly discrete labels" in an 8,950-row
+// dataset (0.5% cardinality) but would read as continuous in an 80-row one
+// (54% cardinality) — the old absolute-threshold version (`uniqueCount <=
+// 10`) got exactly this case wrong, disagreeing with the ratio-based logic
+// the (now-removed) main-page confidence bars used, so the same column could
+// get called Classification in one place and Regression in another.
+// Returns {task, confidence, reason} — 'task' is one of classification |
+// regression | ambiguous | invalid | unknown; only the first two are
+// directly actionable, the rest mean "let the user choose" (see finalTask
+// in DatasetSetupDrawer).
+function suggestTaskType(col, rows) {
   const values = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '')
-  const uniqueCount = new Set(values).size
-  const sample = values[0]
-  const isNumeric = typeof sample === 'number'
-  if (!isNumeric) return 'classification'
-  if (uniqueCount <= 10) return 'classification'
-  return 'regression'
+  const total = values.length
+  const uniqueVals = [...new Set(values)]
+  const nUnique = uniqueVals.length
+  const isNumeric = total > 0 && values.every(v => typeof v === 'number')
+
+  if (nUnique === 0) {
+    return { task: 'unknown', confidence: 'none', reason: 'Column is empty after removing missing values.' }
+  }
+  if (nUnique === 1) {
+    return { task: 'invalid', confidence: 'none', reason: 'Constant column — only one unique value. This cannot be a useful target.' }
+  }
+  if (!isNumeric) {
+    return {
+      task: 'classification', confidence: 'high',
+      reason: `Categorical column with ${nUnique} unique text value${nUnique !== 1 ? 's' : ''} — text targets are always Classification.`,
+    }
+  }
+  if (nUnique === 2) {
+    return {
+      task: 'classification', confidence: 'high',
+      reason: `Binary target with exactly 2 values (${uniqueVals.slice(0, 2).join(', ')}) — Binary Classification.`,
+    }
+  }
+
+  const cardinalityRatio = nUnique / total
+  const allIntegers = values.every(v => Number.isInteger(v))
+  const pctLabel = `${(cardinalityRatio * 100).toFixed(cardinalityRatio < 0.01 ? 2 : 1)}%`
+
+  if (nUnique <= 15) {
+    return {
+      task: 'classification', confidence: nUnique <= 10 ? 'high' : 'medium',
+      reason: `Only ${nUnique} unique values — typical of multi-class labels.`
+        + (allIntegers ? ' All values are integers, confirming discrete labels.' : ''),
+    }
+  }
+  if (cardinalityRatio > 0.20) {
+    return {
+      task: 'regression', confidence: 'high',
+      reason: `${nUnique} unique values across ${total.toLocaleString()} rows (${pctLabel} cardinality) — high-cardinality numeric target.`,
+    }
+  }
+  if (cardinalityRatio > 0.05 && !allIntegers) {
+    return {
+      task: 'regression', confidence: 'medium',
+      reason: `${nUnique} unique decimal values (${pctLabel} cardinality) — likely a continuous target.`,
+    }
+  }
+  if (allIntegers) {
+    return {
+      task: 'classification', confidence: 'medium',
+      reason: `${nUnique} unique integer values, only ${pctLabel} cardinality — reads as discrete labels rather than a continuous quantity.`,
+    }
+  }
+  return {
+    task: 'ambiguous', confidence: 'low',
+    reason: `${nUnique} unique numeric values (${pctLabel} cardinality) — cannot determine automatically. Please choose below.`,
+  }
 }
 
 const formatBytes = (bytes) => {
@@ -634,17 +688,22 @@ function ReferenceGallery({ C, selectedId, onSelect }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COLUMN CHIPS — suggested target gets a visible ring, per the mock
+// COLUMN CHIPS — every column renders identically (neutral) until the user
+// has actually confirmed a target in the drawer (`target` — the real
+// selectedTarget state, never a guess). This used to highlight a
+// suggestTarget()-guessed column before the user chose anything, which read
+// as the platform silently telling the user what their target "should" be —
+// removed per explicit instruction: no target suggestion before selection.
 // ─────────────────────────────────────────────────────────────────────────────
-function ColumnChips({ columns, columnsInfo, suggestedTarget, C }) {
+function ColumnChips({ columns, columnsInfo, target, C }) {
   return (
     <div>
       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, color: C.muted, marginBottom: 10 }}>COLUMNS</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {columns.map(col => {
-          const isTarget = col === suggestedTarget
+          const isTarget = col === target
           return (
-            <span key={col} title={isTarget ? 'Suggested target column' : columnsInfo[col]?.type}
+            <span key={col} title={isTarget ? 'Your chosen target column' : columnsInfo[col]?.type}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5,
                 padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700,
@@ -662,35 +721,13 @@ function ColumnChips({ columns, columnsInfo, suggestedTarget, C }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PROBLEM TYPE CONFIDENCE BARS — Level 2 rule-based estimate, disclosed as such
-// ─────────────────────────────────────────────────────────────────────────────
-function ConfidenceBar({ label, pct, color, C }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{label}</span>
-        <span style={{ fontSize: 12, fontWeight: 800, color }}>{pct}%</span>
-      </div>
-      <div style={{ height: 8, borderRadius: 5, background: C.light, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 5, transition: 'width 0.6s ease' }} />
-      </div>
-    </div>
-  )
-}
-
-function ProblemTypeWidget({ confidence, C }) {
-  return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: '16px 20px' }}>
-      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, color: C.muted, marginBottom: 12 }}>PROBLEM TYPE</div>
-      <ConfidenceBar label="Classification" pct={confidence.classification} color={C.primary} C={C} />
-      <ConfidenceBar label="Regression" pct={confidence.regression} color={C.success} C={C} />
-      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 4 }}>
-        Level 2 (rule-based): estimated from the target column's data type and cardinality — not a trained prediction.
-      </div>
-    </div>
-  )
-}
+// NOTE: this used to be where ConfidenceBar/ProblemTypeWidget lived — the
+// "PROBLEM TYPE: Classification 96% / Regression 4%" card shown on this page
+// before any target was chosen. Removed for the same reason as
+// suggestTarget()/computeTaskConfidence() above: no prediction problem
+// exists, and therefore no task type can be estimated, until a target
+// column is selected. See DatasetSetupDrawer's Step 2 for where the (fixed,
+// ratio-based) detection now actually runs.
 
 function MiniHealthBadge({ pct, C }) {
   const color = pct >= 90 ? C.success : pct >= 70 ? C.warning : C.danger
@@ -715,9 +752,11 @@ function MiniHealthBadge({ pct, C }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PREVIEW TABLE — max 15 rows, horizontally scrollable, target column marked
+// PREVIEW TABLE — max 15 rows, horizontally scrollable. `target` is the
+// real, user-confirmed selectedTarget (null until chosen in the drawer) —
+// never a guess, same rule as ColumnChips above.
 // ─────────────────────────────────────────────────────────────────────────────
-function PreviewTable({ columns, rows, suggestedTarget, C }) {
+function PreviewTable({ columns, rows, target, C }) {
   const shown = rows.slice(0, 15)
   const thStyle = {
     padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700,
@@ -737,7 +776,7 @@ function PreviewTable({ columns, rows, suggestedTarget, C }) {
           <thead>
             <tr>
               {columns.map(col => {
-                const isTarget = col === suggestedTarget
+                const isTarget = col === target
                 return (
                   // Sticky positioning now lives on each <th> directly
                   // (matching the pattern already proven elsewhere in this
@@ -770,8 +809,8 @@ function PreviewTable({ columns, rows, suggestedTarget, C }) {
                 {columns.map(col => (
                   <td key={col} style={{
                     ...tdStyle,
-                    fontWeight: col === suggestedTarget ? 700 : 400,
-                    color: col === suggestedTarget ? C.primary : C.text,
+                    fontWeight: col === target ? 700 : 400,
+                    color: col === target ? C.primary : C.text,
                   }}>
                     {row[col] === null || row[col] === undefined ? '—' : String(row[col])}
                   </td>
@@ -845,7 +884,19 @@ function TaskPill({ task, C }) {
     regression: { label: 'Regression', bg: C.successSoft, color: C.success },
     clustering: { label: 'Clustering', bg: C.warningSoft, color: '#b45309' },
   }
-  const s = map[task] || map.classification
+  // No silent default to Classification when task is null/ambiguous — that
+  // used to make it LOOK like something had been decided (a confident-
+  // looking blue pill) when really nothing had. A neutral placeholder is
+  // the honest state until the user picks one (see the ambiguous/invalid
+  // branches of suggestTaskType).
+  const s = map[task]
+  if (!s) {
+    return (
+      <span style={{ fontSize: 12, fontWeight: 700, color: C.muted, background: C.light, padding: '4px 12px', borderRadius: 20 }}>
+        Not yet chosen
+      </span>
+    )
+  }
   return (
     <span style={{ fontSize: 12, fontWeight: 800, color: s.color, background: s.bg, padding: '4px 12px', borderRadius: 20 }}>
       {s.label}
@@ -853,16 +904,35 @@ function TaskPill({ task, C }) {
   )
 }
 
+// Only these two task strings are directly usable downstream (Diagnose,
+// Sampling, Training all branch on 'classification'/'regression'/
+// 'clustering' — never 'ambiguous'/'invalid'/'unknown'). Everything else
+// suggestTaskType can return means "the algorithm can't tell — the user must
+// pick," so it's treated as no suggestion at all here.
+const ACTIONABLE_TASKS = ['classification', 'regression']
+
 function DatasetSetupDrawer({
   C, dark, open, dataset, onClose,
   setupStep, setSetupStep,
   isLabeled, setIsLabeled,
   selectedTarget, setSelectedTarget,
-  detectedTask, setDetectedTask,
+  suggestedTask, setSuggestedTask,
+  suggestionInfo, setSuggestionInfo,
   taskOverride, setTaskOverride,
   onConfirm,
 }) {
-  const finalTask = taskOverride || detectedTask
+  // suggestedTask is the platform's rule-based guess for the currently
+  // selected column — it NEVER changes once computed for that column, no
+  // matter what the user clicks below. taskOverride is a completely
+  // separate value: what the user has explicitly chosen INSTEAD. finalTask
+  // (what actually gets used going forward, e.g. in Step 3's confirm
+  // summary and handleConfirm) prefers the override, but the "Suggested
+  // task" pill in Step 2 must always read suggestedTask directly, never
+  // finalTask — otherwise clicking "Regression" would make the platform
+  // look like it had suggested Regression all along, which is exactly the
+  // bug being fixed here.
+  const actionableSuggestion = ACTIONABLE_TASKS.includes(suggestedTask) ? suggestedTask : null
+  const finalTask = taskOverride || actionableSuggestion
 
   useEffect(() => {
     if (!open) return
@@ -875,10 +945,14 @@ function DatasetSetupDrawer({
   const columnsInfo = dataset.columnsInfo
   const rows = dataset.rows
 
+  // Suggestion runs HERE, on click — never before. This is the only place
+  // suggestTaskType is ever called, and it always runs against the column
+  // the user just explicitly chose, never a guess.
   const pickTarget = (col) => {
     setSelectedTarget(col)
-    const t = detectTaskType(col, rows)
-    setDetectedTask(t)
+    const result = suggestTaskType(col, rows)
+    setSuggestionInfo(result)
+    setSuggestedTask(result.task)
     setTaskOverride(null)
   }
 
@@ -886,9 +960,14 @@ function DatasetSetupDrawer({
     ? [...new Set(rows.map(r => r[selectedTarget]).filter(v => v !== null && v !== undefined))]
     : []
 
+  // Step 2 additionally requires an ACTIONABLE task type before advancing —
+  // not just a selected column. A constant column ('invalid') or a numeric
+  // column the algorithm genuinely can't call ('ambiguous') must not let the
+  // user proceed until they explicitly pick Classification or Regression
+  // themselves via the override buttons below.
   const canGoNext =
     (setupStep === 1 && isLabeled !== null) ||
-    (setupStep === 2 && (isLabeled ? !!selectedTarget : true)) ||
+    (setupStep === 2 && (isLabeled ? (!!selectedTarget && !!finalTask) : true)) ||
     false
 
   const goNext = () => setSetupStep(s => Math.min(3, s + 1))
@@ -954,7 +1033,7 @@ function DatasetSetupDrawer({
                 Which column should the model predict?
               </h2>
               <p style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
-                Choose a column — we'll detect the task type automatically.
+                Choose a column — we'll suggest a task type automatically.
               </p>
 
               <div style={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${C.border}`,
@@ -984,15 +1063,29 @@ function DatasetSetupDrawer({
                 })}
               </div>
 
-              {selectedTarget && (
-                <div style={{ background: C.primarySoft, border: `1px solid ${C.primary}33`,
-                  borderRadius: 12, padding: '14px 18px', marginTop: 16 }}>
+              {selectedTarget && suggestionInfo && (
+                <div style={{
+                  background: ACTIONABLE_TASKS.includes(suggestionInfo.task) ? C.primarySoft : C.warningSoft,
+                  border: `1px solid ${(ACTIONABLE_TASKS.includes(suggestionInfo.task) ? C.primary : C.warning)}33`,
+                  borderRadius: 12, padding: '14px 18px', marginTop: 16,
+                }}>
+                  {/* This pill shows suggestedTask (via actionableSuggestion)
+                      — NEVER finalTask. It is a fixed, permanent record of
+                      what the platform suggested for THIS column and must
+                      not change if the user clicks an override button below;
+                      only the buttons' own active-highlight and the Step 3
+                      summary reflect the user's actual choice. */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontSize: 12, color: C.muted, fontWeight: 700 }}>Detected task:</span>
-                    <TaskPill task={finalTask} C={C} />
+                    <span style={{ fontSize: 12, color: C.muted, fontWeight: 700 }}>Suggested task:</span>
+                    <TaskPill task={actionableSuggestion} C={C} />
                   </div>
+                  {/* The actual reason from suggestTaskType — e.g. "43 unique
+                      values across 8,950 rows (0.5% cardinality)" — replaces
+                      what used to be a generic "N unique values → X" line
+                      that didn't explain the cardinality-ratio reasoning at
+                      all. */}
                   <div style={{ fontSize: 12, color: C.muted }}>
-                    {columnsInfo[selectedTarget].isNumeric ? 'Numeric' : 'Categorical'} · {columnsInfo[selectedTarget].unique} unique value{columnsInfo[selectedTarget].unique !== 1 ? 's' : ''} → {detectedTask === 'classification' ? 'Classification' : 'Regression'}
+                    {suggestionInfo.reason}
                   </div>
 
                   <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -1011,8 +1104,20 @@ function DatasetSetupDrawer({
                     })}
                   </div>
                   <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8 }}>
-                    Auto-detected based on column type and unique values. You can override it above.
+                    {ACTIONABLE_TASKS.includes(suggestionInfo.task)
+                      ? 'Auto-suggested based on column type and cardinality. You can choose differently above — the suggestion itself won\'t change.'
+                      : 'Could not auto-suggest a task type for this column — please choose one above to continue.'}
                   </div>
+                  {/* Only appears once the user's actual choice diverges from
+                      the suggestion — makes it visually obvious that "what
+                      we suggested" and "what you're using" are now two
+                      different things, rather than silently overwriting one
+                      with the other. */}
+                  {taskOverride && taskOverride !== actionableSuggestion && (
+                    <div style={{ fontSize: 11.5, color: C.text, marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+                      Using <strong>{taskOverride === 'classification' ? 'Classification' : 'Regression'}</strong> instead, per your choice above.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1122,24 +1227,31 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
   const [setupStep, setSetupStep] = useState(1)
   const [isLabeled, setIsLabeled] = useState(null)
   const [selectedTarget, setSelectedTarget] = useState(null)
-  const [detectedTask, setDetectedTask] = useState(null)
+  // The platform's rule-based guess for the currently selected target column
+  // — set once per column pick and never mutated afterward, even if the
+  // user then clicks an override button. taskOverride (below) is the
+  // separate value that actually changes when they do that.
+  const [suggestedTask, setSuggestedTask] = useState(null)
+  // Full {task, confidence, reason} from suggestTaskType, alongside
+  // suggestedTask (just the task string, kept for finalTask/TaskPill/
+  // handleConfirm — unchanged shape there) — this is what lets Step 2 show
+  // WHY a task was suggested instead of a bare label.
+  const [suggestionInfo, setSuggestionInfo] = useState(null)
   const [taskOverride, setTaskOverride] = useState(null)
 
   const buildDataset = useCallback((source, filename, sizeBytes, columns, rows) => {
     const columnsInfo = analyzeColumns(columns, rows)
-    const suggestedTarget = suggestTarget(columns, columnsInfo)
     return {
       source, filename, sizeLabel: formatBytes(sizeBytes),
       rowCount: rows.length, columnCount: columns.length,
-      columns, columnsInfo, rows, suggestedTarget,
-      confidence: computeTaskConfidence(rows, columnsInfo, suggestedTarget),
+      columns, columnsInfo, rows,
       health: computeMiniHealth(rows, columns, columnsInfo),
     }
   }, [])
 
   const resetDrawerState = () => {
-    setSetupStep(1); setIsLabeled(null); setSelectedTarget(null)
-    setDetectedTask(null); setTaskOverride(null)
+    setSetupStep(1); setIsLabeled(null); setSelectedTarget(null); setSuggestionInfo(null)
+    setSuggestedTask(null); setTaskOverride(null)
   }
 
   const handleFile = async (file) => {
@@ -1184,7 +1296,10 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
     onUpdateData?.({
       isLabeled: !!isLabeled,
       targetColumn: isLabeled ? selectedTarget : null,
-      taskType: isLabeled ? (taskOverride || detectedTask) : 'clustering',
+      // canGoNext already guarantees this is actionable before Step 3 is
+      // reachable, but mirrors the same "never trust a bare suggestedTask"
+      // rule as the drawer's own finalTask, rather than assuming.
+      taskType: isLabeled ? (taskOverride || (ACTIONABLE_TASKS.includes(suggestedTask) ? suggestedTask : null)) : 'clustering',
       learningType: isLabeled ? 'supervised' : 'unsupervised',
       datasetFilename: dataset?.filename,
       rowCount: dataset?.rowCount,
@@ -1264,17 +1379,23 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
 
               <div style={{ marginBottom: 20 }}>
                 <ColumnChips columns={dataset.columns} columnsInfo={dataset.columnsInfo}
-                  suggestedTarget={dataset.suggestedTarget} C={C} />
+                  target={selectedTarget} C={C} />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 16, marginBottom: 24, alignItems: 'stretch' }}>
-                <ProblemTypeWidget confidence={dataset.confidence} C={C} />
+              {/* No "Problem Type" widget here — removed along with the
+                  target-guessing it depended on (see NOTE above ColumnChips
+                  and above MiniHealthBadge). Data Health doesn't need a
+                  target column to mean something, so it's the only KPI that
+                  belongs on this pre-selection page; sized to its own
+                  content now rather than stretched to fill a 2-column grid
+                  that no longer has a second item. */}
+              <div style={{ maxWidth: 340, marginBottom: 24 }}>
                 <MiniHealthBadge pct={dataset.health} C={C} />
               </div>
 
               <div style={{ marginBottom: 24 }}>
                 <PreviewTable columns={dataset.columns} rows={dataset.rows}
-                  suggestedTarget={dataset.suggestedTarget} C={C} />
+                  target={selectedTarget} C={C} />
               </div>
 
               <button onClick={openDrawer}
@@ -1295,7 +1416,8 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
         setupStep={setupStep} setSetupStep={setSetupStep}
         isLabeled={isLabeled} setIsLabeled={setIsLabeled}
         selectedTarget={selectedTarget} setSelectedTarget={setSelectedTarget}
-        detectedTask={detectedTask} setDetectedTask={setDetectedTask}
+        suggestedTask={suggestedTask} setSuggestedTask={setSuggestedTask}
+        suggestionInfo={suggestionInfo} setSuggestionInfo={setSuggestionInfo}
         taskOverride={taskOverride} setTaskOverride={setTaskOverride}
         onConfirm={handleConfirm}
       />
