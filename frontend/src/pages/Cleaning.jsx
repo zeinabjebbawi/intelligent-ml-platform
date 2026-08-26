@@ -482,10 +482,10 @@ function CollapsibleRail({ label, isOpen, setIsOpen, width = 200, collapsedHeigh
 // (shrinking toward the LEFT) — for the "Outliers per Column" chart, which
 // needs to stay full-width beside the Columns rail rather than living in
 // its own separately-sized rail.
-function CollapsibleSectionV({ label, isOpen, setIsOpen, children }) {
+function CollapsibleSectionV({ label, isOpen, setIsOpen, children, width = '100%' }) {
   const { C } = useTheme()
   return (
-    <div style={{ width: '100%', background: C.white, border: `1px solid ${C.border}`,
+    <div style={{ width, minWidth: width === '100%' ? 0 : width, background: C.white, border: `1px solid ${C.border}`,
       borderRadius: 12, boxShadow: shadow2, overflow: 'hidden' }}>
       <div onClick={() => setIsOpen(o => !o)}
         style={{ padding: '10px 12px', fontWeight: 700, fontSize: 11, letterSpacing: 1,
@@ -1087,10 +1087,13 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
   useEffect(() => { saveSettings({ z_threshold: zThresh, iqr_mult: iqrMult }) }, [zThresh, iqrMult]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadColumn = async (col) => {
-    // The "Outliers per Column" chart collapses into its rail once the user
-    // drills into a specific column — it stays reachable (click to reopen),
-    // it just doesn't take over the main content area or disappear outright.
+    // Both the "Outliers per Column" chart AND the Columns list collapse
+    // once the user drills into a specific column — selecting one from
+    // either side collapses both together. They stay reachable (click to
+    // reopen), they just don't take over the main content area once a
+    // column's detail view is showing below.
     setChartRailOpen(false)
+    setColListOpen(false)
     setSelCol(col); setColData(null); setColLoad(true); setKeptRows(new Set())
     // BUG FIX: zThresh/iqrMult are shared state across every column's detail
     // view. Without resetting them here, a threshold left over from a
@@ -1146,6 +1149,7 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
       } : prev)
       setSelCol(null)
       setChartRailOpen(true)
+      setColListOpen(true)
     } catch (e) { setError(e.message) }
     finally { setRemoving(false) }
   }
@@ -1260,16 +1264,21 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
         </div>
       )}
 
-      {/* ROW 1 — Columns list (unchanged, still collapses horizontally into
-          its own rail) beside the outliers-per-column chart, which now gets
-          the REST of the row's width (previously boxed into its own narrow
-          260px rail) and collapses vertically instead of horizontally, so
-          shrinking it never squeezes it toward the left. */}
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', width: '100%', gap: 0 }}>
-        <CollapsibleRail label="Columns" isOpen={colListOpen} setIsOpen={setColListOpen}>
-          <ColumnListItems columns={numCols} selected={selCol} onSelect={loadColumn}
-            countsMap={colCounts} colorKey="out" />
-        </CollapsibleRail>
+      {/* ROW 1 — back to sitting side by side (Columns keeps its original
+          200px width, the chart takes the rest), but BOTH now collapse the
+          same way: hiding their content and shrinking toward the TOP
+          (CollapsibleSectionV) rather than the column list narrowing
+          sideways into a vertical pill rail (which read as "colliding" into
+          the left edge instead of tucking away like the chart already did).
+          Collapsed, each becomes just its own thin header bar at its own
+          width, still positioned beside the other. */}
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', width: '100%', gap: 12 }}>
+        <CollapsibleSectionV label="Columns" isOpen={colListOpen} setIsOpen={setColListOpen} width={200}>
+          <div style={{ maxHeight: 240, overflowY: 'auto', margin: '-10px -12px' }}>
+            <ColumnListItems columns={numCols} selected={selCol} onSelect={loadColumn}
+              countsMap={colCounts} colorKey="out" />
+          </div>
+        </CollapsibleSectionV>
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <CollapsibleSectionV label="Outliers per Column" isOpen={chartRailOpen} setIsOpen={setChartRailOpen}>
