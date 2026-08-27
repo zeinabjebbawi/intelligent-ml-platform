@@ -97,7 +97,7 @@ def compute_redundancy(corr_matrix: pd.DataFrame, feature: str, others: List[str
     vals = [abs(safe_num(corr_matrix.loc[feature, c], 0.0)) for c in valid]
     return round(max(vals), 3) if vals else 0.0
 
-REDUNDANCY_THRESHOLD = 0.85  # same threshold multicollinearity warnings use
+REDUNDANCY_THRESHOLD = 0.80  # matches the Redundancy vs Relevance chart's own 0.80 zone-shading line (frontend REDUND_THRESHOLD) — kept separate from the 0.85 multicollinearity-pair cutoff below, a different, unrelated warning
 
 def signal_tier(importance: float) -> str:
     """The feature's signal strength w.r.t. the target, on its own —

@@ -38,11 +38,6 @@ const callFS = async (ep, body) => {
   return r.json()
 }
 
-const downloadFile = (filePath, filename) => {
-  const url = `${ML_API}/cleaning/download?file_path=${encodeURIComponent(filePath)}&filename=${encodeURIComponent(filename)}`
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
-}
-
 const CLASS_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4']
 const TABLE_BODY_MAX_HEIGHT = 420
 
@@ -102,26 +97,38 @@ const ChartCard = ({ title, sub, children, badge, style: extra }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // CORRELATION HEATMAP — primary (high) -> card bg (0) -> danger (negative)
 // ─────────────────────────────────────────────────────────────────────────────
-const CorrelationHeatmap = ({ data, multicolPairs, targetCol, features }) => {
+const CorrelationHeatmap = ({ data, multicolPairs, targetCol, expanded = false }) => {
   const { C, dark } = useTheme()
-  // `tierByName` looks up each feature's own strong/moderate/weak signal
-  // (w.r.t. the target) so cells in the target's row/column can be
-  // border-colored accordingly — green for strong, red for weak, matching
-  // the same convention used in the redundancy-vs-relevance scatter and the
-  // feature table. Computed unconditionally, before any early return, so
-  // this hook call order never varies across renders (Rules of Hooks).
-  const tierByName = useMemo(() => Object.fromEntries(
-    (features || []).map(f => [f.name, f.signal_tier])
-  ), [features])
   if (!data?.labels?.length) return null
   const { labels, matrix } = data
   // `data.labels` now includes the target column itself (backend change —
   // it used to be numeric features only), so its correlation with every
   // feature is visible directly in the grid.
   const targetIndex = labels.indexOf(targetCol)
-  const N    = labels.length
-  const CELL = Math.max(20, Math.min(52, 580 / N))
-  const LBL  = 88
+  const N = labels.length
+  // Smaller default footprint (was capped at 52px/cell off a 580 base —
+  // routinely taller than the card, forcing a scroll to see the legend at
+  // the bottom) so the whole heatmap — headers, every row, and the legend —
+  // fits without scrolling for a typical feature count. The `expanded`
+  // variant (rendered inside the fullscreen modal below) gets real room to
+  // breathe instead.
+  const CELL = expanded
+    ? Math.max(26, Math.min(58, 900 / N))
+    : Math.max(16, Math.min(34, 460 / N))
+  const LBL = expanded ? 108 : 82
+  // PAD_TOP is the headroom reserved above the grid for the column labels.
+  // Oblique (-45°) rotation still clipped longer names because a diagonal
+  // label's horizontal reach grows with its string length, which this
+  // component can't predict per-label — so column labels are now fully
+  // vertical (rotated -90°) instead: a vertical label's footprint is just
+  // its string length translated straight up, which fixed headroom
+  // reliably covers regardless of how long any individual name is.
+  // `overflow: 'visible'` on the <svg> stays as a hard guarantee on top of
+  // that headroom (an <svg> clips its own content at its boundary by
+  // default, unlike ordinary HTML elements).
+  const PAD_TOP = expanded ? 160 : 140
+  const PAD_BOTTOM = 10
+  const LABEL_Y = PAD_TOP - 10
 
   const heatColor = (val) => {
     const v = Math.max(-1, Math.min(1, val))
@@ -143,20 +150,21 @@ const CorrelationHeatmap = ({ data, multicolPairs, targetCol, features }) => {
   )
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <svg width={N * CELL + LBL + 24} height={N * CELL + 82} style={{ display: 'block' }}>
+    <div style={{ overflowX: 'auto', overflowY: 'visible' }}>
+      <svg width={N * CELL + LBL + 24} height={N * CELL + PAD_TOP + PAD_BOTTOM}
+        style={{ display: 'block', overflow: 'visible' }}>
         {labels.map((lbl, ci) => (
           <text key={ci}
-            x={ci * CELL + CELL / 2 + LBL} y={70}
-            textAnchor="end" fontSize={Math.min(11, CELL * 0.5)}
+            x={ci * CELL + CELL / 2 + LBL} y={LABEL_Y}
+            textAnchor="start" fontSize={Math.min(11, CELL * 0.5)}
             fill={lbl === targetCol ? C.primary : C.muted}
             fontWeight={lbl === targetCol ? 700 : 400}
-            transform={`rotate(-45,${ci * CELL + CELL / 2 + LBL},70)`}>
+            transform={`rotate(-90,${ci * CELL + CELL / 2 + LBL},${LABEL_Y})`}>
             {lbl.length > 14 ? lbl.slice(0, 12) + '…' : lbl}
           </text>
         ))}
         {labels.map((lbl, ri) => (
-          <text key={ri} x={LBL - 4} y={ri * CELL + CELL / 2 + 75 + 4}
+          <text key={ri} x={LBL - 4} y={ri * CELL + CELL / 2 + PAD_TOP + 4}
             textAnchor="end" fontSize={Math.min(11, CELL * 0.5)}
             fill={lbl === targetCol ? C.primary : C.muted}
             fontWeight={lbl === targetCol ? 700 : 400}>
@@ -171,17 +179,20 @@ const CorrelationHeatmap = ({ data, multicolPairs, targetCol, features }) => {
             // Cells in the target's own row/column (never overlapping with
             // isHigh — multicol pairs are only ever computed between two
             // FEATURES, never involving the target) get a green/red border
-            // reflecting the OTHER feature's own signal tier w.r.t. the
-            // target — strong = green, weak = red, moderate = no border.
+            // classified directly off this cell's own |correlation| value —
+            // strong (>=0.6) = green, weak (<0.3) = red, moderate = no
+            // border. Computed from the raw matrix value rather than the
+            // backend's `signal_tier` field so this chart's border always
+            // matches the exact 0.3/0.6 bands shown here, independent of
+            // whatever thresholds `signal_tier` itself uses elsewhere.
             const touchesTarget = targetIndex !== -1 && !isDiag && (ri === targetIndex || ci === targetIndex)
-            const otherLabel = touchesTarget ? (ri === targetIndex ? labels[ci] : labels[ri]) : null
-            const otherTier  = otherLabel ? tierByName[otherLabel] : null
-            const targetBorder = otherTier === 'strong' ? C.success : otherTier === 'weak' ? C.danger : null
+            const absVal = Math.abs(val)
+            const targetBorder = !touchesTarget ? null : absVal >= 0.6 ? C.success : absVal < 0.3 ? C.danger : null
             const borderColor = isHigh ? C.warning : targetBorder
             return (
               <g key={`${ri}-${ci}`}>
                 <rect
-                  x={ci * CELL + LBL} y={ri * CELL + 75}
+                  x={ci * CELL + LBL} y={ri * CELL + PAD_TOP}
                   width={CELL - 1} height={CELL - 1}
                   fill={isDiag ? C.primary : heatColor(val)}
                   rx={CELL > 32 ? 3 : 1}
@@ -189,14 +200,14 @@ const CorrelationHeatmap = ({ data, multicolPairs, targetCol, features }) => {
                   strokeWidth={borderColor ? 2 : 0}
                 />
                 {CELL >= 30 && !isDiag && (
-                  <text x={ci * CELL + CELL / 2 + LBL} y={ri * CELL + CELL / 2 + 75 + 4}
+                  <text x={ci * CELL + CELL / 2 + LBL} y={ri * CELL + CELL / 2 + PAD_TOP + 4}
                     textAnchor="middle" fontSize={Math.min(9, CELL * 0.2)}
                     fill={heatTextColor(val)}>
                     {val.toFixed(2)}
                   </text>
                 )}
                 {isDiag && (
-                  <text x={ci * CELL + CELL / 2 + LBL} y={ri * CELL + CELL / 2 + 75 + 4}
+                  <text x={ci * CELL + CELL / 2 + LBL} y={ri * CELL + CELL / 2 + PAD_TOP + 4}
                     textAnchor="middle" fontSize={9} fill="white">1</text>
                 )}
               </g>
@@ -233,8 +244,23 @@ const CorrelationHeatmap = ({ data, multicolPairs, targetCol, features }) => {
 // — "relevant but redundant" needs its own visually distinct color from
 // "moderate signal", not to reuse the theme's single warning tone for both.
 const YELLOW = '#eab308'
+// Background-only accent for the "Strong, Redundant" zone — visually
+// distinguishes it from the "Moderate, Redundant" zone (which shares
+// YELLOW, matching the single `redundant_high` dot bucket both tiers map
+// to) purely as shading. Deliberately NOT part of REC_COLORS/REC_LABELS —
+// no dot is ever drawn in this color, this is background-zone tint only.
+const BABY_BLUE = '#7dd3fc'
+// Same weak/moderate/strong relevance thresholds as the Feature → Target
+// Importance histogram just above (0.3 and 0.6) — both charts measure the
+// exact same underlying quantity (|correlation with target|), so they must
+// agree on where one tier ends and the next begins.
+const REL_WEAK_MAX = 0.3
+const REL_MOD_MAX  = 0.6
+// Redundancy threshold separating "independent" from "redundant" — raised
+// from the old 0.5 midpoint to 0.8 per explicit request.
+const REDUND_THRESHOLD = 0.8
 
-const RedundancyRelevanceChart = ({ data }) => {
+const RedundancyRelevanceChart = ({ data, expanded = false }) => {
   const { C } = useTheme()
   const [hovered, setHovered] = useState(null)
   if (!data?.length) return null
@@ -249,38 +275,76 @@ const RedundancyRelevanceChart = ({ data }) => {
     weak_redundant: 'Weak & redundant',
   }
 
-  const W = 600, H = 320, PL = 60, PR = 24, PT = 24, PB = 48
+  // Smaller default footprint (H was 320 — taller than the card comfortably
+  // fit next to everything else on the page, forcing a scroll) so the whole
+  // chart fits in view by default; `expanded` (rendered inside the
+  // fullscreen modal, same pattern as the heatmap's ⛶ button) gets full size.
+  const W = expanded ? 760 : 600
+  const H = expanded ? 380 : 250
+  const PL = 60, PR = 24, PT = 20, PB = 40
   const scaleX = (v) => PL + v * (W - PL - PR)
   const scaleY = (v) => H - PB - v * (H - PT - PB)
+  const FS = expanded ? 11 : 9
+
+  // Six regions: 3 relevance tiers (weak/moderate/strong) × 2 redundancy
+  // tiers (below/above REDUND_THRESHOLD) — replacing the old 4-quadrant
+  // layout (a single relevance split at 0.15, redundancy split at 0.5).
+  const xWeakEnd = scaleX(REL_WEAK_MAX)
+  const xModEnd  = scaleX(REL_MOD_MAX)
+  const yThresh  = scaleY(REDUND_THRESHOLD)
+  const topH     = yThresh - PT          // "high redundancy" band height
+  const botH     = (H - PB) - yThresh    // "low redundancy" band height
+
+  // Region fills mostly match the REC_COLORS bucket a dot landing there
+  // would be drawn with (moderate/strong "redundant" zones share YELLOW,
+  // matching the backend's single shared `redundant_high` dot bucket for
+  // both tiers) — except two explicit, deliberate exceptions kept exactly
+  // as requested even though they diverge from that dot-color mapping:
+  // (1) the weak column's shading is grey-on-top / red-on-bottom, the
+  // opposite of what a dot's own color there would be (a request repeated
+  // multiple times, so treated as a firm, final preference for this one
+  // column — background tint only, dot colors/logic are untouched); (2)
+  // the strong-redundant zone uses BABY_BLUE as a purely decorative
+  // background accent instead of YELLOW, again visual-only.
+  const regions = [
+    // weak (0 – 0.3) — deliberately inverted from the dot-color mapping.
+    { x: PL,       y: PT,     w: xWeakEnd - PL,       h: topH, fill: C.muted,   op: '14' }, // weak & redundant
+    { x: PL,       y: yThresh, w: xWeakEnd - PL,       h: botH, fill: C.danger,  op: '0d' }, // weak & independent
+    // moderate (0.3 – 0.6)
+    { x: xWeakEnd, y: PT,     w: xModEnd - xWeakEnd,  h: topH, fill: YELLOW,    op: '14' }, // moderate & redundant
+    { x: xWeakEnd, y: yThresh, w: xModEnd - xWeakEnd,  h: botH, fill: C.warning, op: '14' }, // moderate & independent
+    // strong (0.6 – 1.0) — top uses BABY_BLUE, a deliberate visual-only exception.
+    { x: xModEnd,  y: PT,     w: (W - PR) - xModEnd,  h: topH, fill: BABY_BLUE, op: '20' }, // strong but redundant
+    { x: xModEnd,  y: yThresh, w: (W - PR) - xModEnd,  h: botH, fill: C.success, op: '0f' }, // strong independent signals
+  ]
+
+  const midWeak = PL + (xWeakEnd - PL) / 2
+  const midMod  = xWeakEnd + (xModEnd - xWeakEnd) / 2
+  const midStrong = xModEnd + ((W - PR) - xModEnd) / 2
 
   return (
     <div style={{ position: 'relative' }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ overflow: 'visible' }}>
-        {/* Bottom-right: strong independent signals (green) */}
-        <rect x={PL + (W - PL - PR) * 0.15} y={H / 2} width={(W - PL - PR) * 0.85} height={H / 2 - PB}
-          fill={`${C.success}0a`} />
-        {/* Top-right: relevant but redundant (yellow-tinted, matches the dot color) */}
-        <rect x={PL + (W - PL - PR) * 0.15} y={PT} width={(W - PL - PR) * 0.85} height={H / 2 - PT}
-          fill={`${YELLOW}0d`} />
-        {/* Bottom-left: weak & independent (grey) */}
-        <rect x={PL} y={H / 2} width={(W - PL - PR) * 0.15} height={H / 2 - PB}
-          fill={`${C.muted}14`} />
-        {/* Top-left: weak & redundant (red) */}
-        <rect x={PL} y={PT} width={(W - PL - PR) * 0.15} height={H / 2 - PT}
-          fill={`${C.danger}0d`} />
+        {regions.map((r, i) => (
+          <rect key={i} x={r.x} y={r.y} width={Math.max(0, r.w)} height={Math.max(0, r.h)} fill={`${r.fill}${r.op}`} />
+        ))}
         <line x1={PL} y1={H - PB} x2={W - PR} y2={H - PB} stroke={C.border} strokeWidth={1.5} />
         <line x1={PL} y1={PT} x2={PL} y2={H - PB} stroke={C.border} strokeWidth={1.5} />
-        <line x1={PL + (W - PL - PR) * 0.15} y1={PT} x2={PL + (W - PL - PR) * 0.15} y2={H - PB}
-          stroke={C.border} strokeDasharray="4,3" strokeWidth={1} />
-        <line x1={PL} y1={H / 2} x2={W - PR} y2={H / 2} stroke={C.border} strokeDasharray="4,3" strokeWidth={1} />
-        <text x={PL + (W - PL - PR) * 0.57} y={H - PB - 8} fontSize={9} fill={C.success} fontWeight={700}>
-          ✓ Strong Independent Signals
-        </text>
-        <text x={PL + (W - PL - PR) * 0.57} y={PT + 14} fontSize={9} fill={C.warning} fontWeight={700}>
-          ⚠ Relevant but Redundant
-        </text>
-        <text x={PL + 8} y={H - PB - 8} fontSize={9} fill={C.muted}>Weak &amp; Independent</text>
-        <text x={PL + 8} y={PT + 14} fontSize={9} fill={C.muted}>Weak &amp; Redundant</text>
+        {/* Relevance-tier boundaries (weak/moderate, moderate/strong) */}
+        <line x1={xWeakEnd} y1={PT} x2={xWeakEnd} y2={H - PB} stroke={C.border} strokeDasharray="4,3" strokeWidth={1} />
+        <line x1={xModEnd} y1={PT} x2={xModEnd} y2={H - PB} stroke={C.border} strokeDasharray="4,3" strokeWidth={1} />
+        {/* Redundancy threshold — raised to 0.80 */}
+        <line x1={PL} y1={yThresh} x2={W - PR} y2={yThresh} stroke={C.border} strokeDasharray="4,3" strokeWidth={1} />
+        <text x={W - PR - 4} y={yThresh - 5} textAnchor="end" fontSize={FS - 1} fill={C.muted}>redundancy ≥ 0.80</text>
+
+        {/* Region labels — short, centered in each of the 6 bands */}
+        <text x={midStrong} y={H - PB - 8} textAnchor="middle" fontSize={FS} fill={C.success} fontWeight={700}>✓ Strong Independent</text>
+        <text x={midStrong} y={PT + 14} textAnchor="middle" fontSize={FS} fill="#0284c7" fontWeight={700}>Strong, Redundant</text>
+        <text x={midMod} y={H - PB - 8} textAnchor="middle" fontSize={FS} fill="#a16207" fontWeight={700}>Moderate Independence</text>
+        <text x={midMod} y={PT + 14} textAnchor="middle" fontSize={FS} fill={C.warning} fontWeight={700}>⚠ Moderate, Redundant</text>
+        <text x={midWeak} y={H - PB - 8} textAnchor="middle" fontSize={FS} fill={C.muted}>Weak &amp; Independent</text>
+        <text x={midWeak} y={PT + 14} textAnchor="middle" fontSize={FS} fill={C.muted}>Weak &amp; Redundant</text>
+
         <text x={(W + PL) / 2} y={H - 4} textAnchor="middle" fontSize={11} fill={C.muted}>
           Relevance (|correlation with target|)
         </text>
@@ -294,7 +358,7 @@ const RedundancyRelevanceChart = ({ data }) => {
             <text x={scaleX(v)} y={H - PB + 14} textAnchor="middle" fontSize={9} fill={C.muted}>{v.toFixed(1)}</text>
           </g>
         ))}
-        {[0, 0.25, 0.5, 0.75, 1.0].map(v => (
+        {[0, 0.2, 0.4, 0.6, 0.8, 1.0].map(v => (
           <g key={v}>
             <line x1={PL - 4} y1={scaleY(v)} x2={PL} y2={scaleY(v)} stroke={C.border} />
             <text x={PL - 8} y={scaleY(v) + 4} textAnchor="end" fontSize={9} fill={C.muted}>{v.toFixed(2)}</text>
@@ -723,9 +787,10 @@ export default function FeatureSelectionPage({
   const [selected, setSelected] = useState(new Set())
   const [applying, setApplying] = useState(false)
   const [applied,  setApplied]  = useState(false)
-  const [newPath,  setNewPath]  = useState(null)
   const [showPairplot, setShowPair] = useState(false)
   const [redoModal, setRedoModal] = useState(false)
+  const [heatmapExpanded, setHeatmapExpanded] = useState(false)
+  const [relevanceExpanded, setRelevanceExpanded] = useState(false)
   const [redoing,   setRedoing]   = useState(false)
 
   // filePath is the PERMANENT pre-selection snapshot — the analysis this
@@ -773,7 +838,6 @@ export default function FeatureSelectionPage({
         // after resuming an already-applied step; see handleApply's own
         // fresh-analyze call for the identical fix on the immediate-Apply path.
         setSelected(new Set(outData.features.map(f => f.name)))
-        setNewPath(outputPath)
         setApplied(true)
       })
       .catch(() => { /* resume best-effort — stays in the pending selection state if this fails */ })
@@ -803,7 +867,6 @@ export default function FeatureSelectionPage({
       const res = await callFS('apply', {
         file_path: filePath, target_column: targetCol, features_to_keep: [...selected],
       })
-      setNewPath(res.new_file_path)
       if (registerVersion)
         await registerVersion('feature_selection', res.new_file_path, 'Feature Selected Version', res.row_count,
           { features_kept: res.features_kept, features_dropped: res.features_dropped })
@@ -826,7 +889,7 @@ export default function FeatureSelectionPage({
     try {
       if (resetStep) await resetStep('feature_selection')
       if (data) setSelected(new Set(data.features.map(f => f.name)))
-      setApplied(false); setNewPath(null); setRedoModal(false)
+      setApplied(false); setRedoModal(false)
     } finally { setRedoing(false) }
   }
 
@@ -888,34 +951,26 @@ export default function FeatureSelectionPage({
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`,
-        padding: '20px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        padding: '12px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 900, color: C.text, marginBottom: 4 }}>Feature Selection</h1>
-          <p style={{ fontSize: 13, color: C.muted }}>
+          <h1 style={{ fontSize: 20, fontWeight: 900, color: C.text, marginBottom: 1, lineHeight: 1.2 }}>Feature Selection</h1>
+          <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.3 }}>
             Identify meaningful features using statistical correlation — before any model is trained.
           </p>
         </div>
+        {/* Download and Continue-to-Training were removed from here per
+            explicit request — neither is lost: every registered version
+            (including "Feature Selected" once applied) already has its own
+            download button on the Versions bar directly below, and the
+            Sticky Apply Panel at the page bottom already has the real
+            "Continue to Training →" button (this was a duplicate sitting
+            in the header, not the only copy). */}
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
           <button onClick={() => setRedoModal(true)}
             style={{ padding: '9px 18px', borderRadius: 9, border: `1px solid ${C.danger}`,
               background: C.dangerSoft, color: C.danger, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
             ↺ Redo Selection
           </button>
-          {applied && newPath && (
-            <button onClick={() => downloadFile(newPath, 'dataset_feature_selected.csv')}
-              style={{ padding: '9px 18px', borderRadius: 9, border: `1px solid ${C.success}`,
-                background: C.successSoft, color: C.success, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-              ⬇ Download
-            </button>
-          )}
-          {applied && newPath && (
-            <button onClick={() => onNext && onNext('training', {})}
-              style={{ padding: '10px 22px', borderRadius: 10, border: 'none',
-                background: C.primary, color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                boxShadow: `0 4px 16px ${C.primary}44` }}>
-              Continue to Training →
-            </button>
-          )}
         </div>
       </div>
 
@@ -960,7 +1015,15 @@ export default function FeatureSelectionPage({
         <div style={{ display: 'grid', gridTemplateColumns: '56% 42%', gap: 18, marginBottom: 18 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <ChartCard title="Full Correlation Heatmap"
-              sub={`Every numeric feature pair, including the target "${targetCol}". Yellow-bordered = multicollinearity warning; green/red-bordered = strong/weak signal vs. the target.${data.n_unencoded_features > 0 ? ` ${data.n_unencoded_features} unencoded column(s) excluded — see Feature List below.` : ''}`}>
+              sub={`Every numeric feature pair, including the target "${targetCol}". Yellow-bordered = multicollinearity warning; green/red-bordered = strong/weak signal vs. the target.${data.n_unencoded_features > 0 ? ` ${data.n_unencoded_features} unencoded column(s) excluded — see Feature List below.` : ''}`}
+              badge={
+                <button onClick={() => setHeatmapExpanded(true)} title="Expand heatmap"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28,
+                    borderRadius: 8, border: `1px solid ${C.border}`, background: C.faint, color: C.muted,
+                    cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>
+                  ⛶
+                </button>
+              }>
               <CorrelationHeatmap data={data.correlation_matrix} multicolPairs={data.multicol_pairs || []} targetCol={targetCol} features={ft} />
             </ChartCard>
             <ChartCard title="⚠ Multicollinearity Check"
@@ -979,18 +1042,30 @@ export default function FeatureSelectionPage({
                   <YAxis dataKey="feature" type="category" tick={{ fontSize: 10, fill: C.muted }} width={100} />
                   <Tooltip formatter={v => [(v * 100).toFixed(1) + '%', 'Importance']}
                     contentStyle={{ fontSize: 11, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text }} />
-                  {/* Labels sit ABOVE the whole chart (position:'top'), not
-                      floating inline among the bars where they used to be
-                      unreadable — a vertical ReferenceLine's default label
-                      placement centers it mid-chart, right on top of
-                      whichever bar happens to be there. */}
-                  <ReferenceLine x={0.3} stroke={C.success} strokeDasharray="4,2"
-                    label={{ value: 'strong ≥ 0.3', position: 'top', fontSize: 9, fontWeight: 700, fill: C.success }} />
-                  <ReferenceLine x={0.1} stroke={C.warning} strokeDasharray="4,2"
-                    label={{ value: 'moderate ≥ 0.1', position: 'top', fontSize: 9, fontWeight: 700, fill: C.warning }} />
+                  {/* Only 2 real dashed boundary lines (0.3, 0.6) — no
+                      label attached to either, since a label anchored right
+                      at a line's own x-position collides with its neighbor
+                      when two lines sit close together. Instead each of the
+                      3 tiers gets its own label at ITS zone's horizontal
+                      midpoint (0.15 / 0.45 / 0.8), carried by a 3rd kind of
+                      ReferenceLine with no visible stroke (stroke="none") —
+                      purely a label anchor, not a boundary marker — so all
+                      three names stay spaced out and legible regardless of
+                      how close together 0.3 and 0.6 render on screen. Same
+                      0.3/0.6 thresholds as the Redundancy vs Relevance
+                      chart's REL_WEAK_MAX/REL_MOD_MAX just below — both
+                      charts measure the same |correlation| quantity. */}
+                  <ReferenceLine x={0.3} stroke={C.muted} strokeDasharray="4,2" />
+                  <ReferenceLine x={0.6} stroke={C.success} strokeDasharray="4,2" />
+                  <ReferenceLine x={0.15} stroke="none"
+                    label={{ value: 'weak', position: 'top', fontSize: 9, fontWeight: 700, fill: C.muted }} />
+                  <ReferenceLine x={0.45} stroke="none"
+                    label={{ value: 'moderate', position: 'top', fontSize: 9, fontWeight: 700, fill: C.warning }} />
+                  <ReferenceLine x={0.8} stroke="none"
+                    label={{ value: 'strong', position: 'top', fontSize: 9, fontWeight: 700, fill: C.success }} />
                   <Bar dataKey="importance" radius={[0, 4, 4, 0]}>
                     {importanceData.map((d, i) => (
-                      <Cell key={i} fill={d.importance >= 0.3 ? C.success : d.importance >= 0.1 ? C.primary : C.muted} />
+                      <Cell key={i} fill={d.importance >= 0.6 ? C.success : d.importance >= 0.3 ? C.warning : C.muted} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -1007,7 +1082,15 @@ export default function FeatureSelectionPage({
         {/* ── Redundancy vs Relevance (full width) ───────────────────────── */}
         <ChartCard title="Redundancy vs Relevance — Feature Decision Space"
           sub="Each dot = one numeric feature. Keep features in the bottom-right (high relevance, low redundancy). Features in the top-right are relevant but redundant — consider dropping one of each redundant pair."
-          style={{ marginBottom: 18 }}>
+          style={{ marginBottom: 18 }}
+          badge={
+            <button onClick={() => setRelevanceExpanded(true)} title="Expand chart"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28,
+                borderRadius: 8, border: `1px solid ${C.border}`, background: C.faint, color: C.muted,
+                cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>
+              ⛶
+            </button>
+          }>
           <RedundancyRelevanceChart data={data.rdv_scatter || []} />
         </ChartCard>
 
@@ -1127,6 +1210,53 @@ export default function FeatureSelectionPage({
       </div>
 
       {redoModal && <RedoModal onCancel={() => setRedoModal(false)} onConfirm={handleRedo} working={redoing} />}
+      {heatmapExpanded && (
+        <div onClick={() => setHeatmapExpanded(false)}
+          style={{ position: 'fixed', inset: 0, background: C.scrim, backdropFilter: 'blur(4px)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: C.overlayCard, border: `1px solid ${C.border}`, borderRadius: 16,
+              padding: '20px 24px', maxWidth: '94vw', maxHeight: '92vh', overflow: 'auto',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, gap: 20 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 16, color: C.text }}>Full Correlation Heatmap</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                  Every numeric feature pair, including the target "{targetCol}".
+                </div>
+              </div>
+              <button onClick={() => setHeatmapExpanded(false)}
+                style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: `1px solid ${C.border}`,
+                  background: C.faint, color: C.text, cursor: 'pointer', fontSize: 14 }}>✕</button>
+            </div>
+            <CorrelationHeatmap data={data.correlation_matrix} multicolPairs={data.multicol_pairs || []}
+              targetCol={targetCol} features={ft} expanded />
+          </div>
+        </div>
+      )}
+      {relevanceExpanded && (
+        <div onClick={() => setRelevanceExpanded(false)}
+          style={{ position: 'fixed', inset: 0, background: C.scrim, backdropFilter: 'blur(4px)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: C.overlayCard, border: `1px solid ${C.border}`, borderRadius: 16,
+              padding: '20px 24px', maxWidth: '94vw', maxHeight: '92vh', overflow: 'auto',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, gap: 20 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 16, color: C.text }}>Redundancy vs Relevance — Feature Decision Space</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 2, maxWidth: 560 }}>
+                  Each dot = one numeric feature. Keep features in the bottom-right (high relevance, low redundancy).
+                </div>
+              </div>
+              <button onClick={() => setRelevanceExpanded(false)}
+                style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: `1px solid ${C.border}`,
+                  background: C.faint, color: C.text, cursor: 'pointer', fontSize: 14 }}>✕</button>
+            </div>
+            <RedundancyRelevanceChart data={data.rdv_scatter || []} expanded />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
