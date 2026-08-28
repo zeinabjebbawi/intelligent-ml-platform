@@ -10,7 +10,7 @@ from typing import Optional, List
 import pandas as pd
 import numpy as np
 import os
-from imblearn.over_sampling import SMOTE, SMOTENC
+from imblearn.over_sampling import SMOTE, SMOTENC, RandomOverSampler, ADASYN, BorderlineSMOTE, KMeansSMOTE
 from utils.balance_checker import check_target_balance
 
 router = APIRouter(prefix="/sampling", tags=["Sampling"])
@@ -142,37 +142,76 @@ def _sample_per_group(df: pd.DataFrame, col: str, sampler) -> pd.DataFrame:
     parts = [sampler(df.iloc[idx]) for idx in groups.values()]
     return pd.concat(parts, ignore_index=True)
 
+def _minority_class_count(df: pd.DataFrame, target_col: str, method_label: str) -> int:
+    """Rows in the smallest class of target_col — every synthetic-minority
+    method below (SMOTE and its 3 variants) needs at least 2 to interpolate
+    or estimate a neighborhood from. Shared so the "too few rows" error
+    reads identically no matter which of the 4 methods triggered it."""
+    counts = df[target_col].value_counts()
+    minority_n = int(counts.min())
+    if minority_n < 2:
+        raise HTTPException(400,
+            f"{method_label} needs at least 2 rows in the minority class to work from "
+            f"(the smallest class here has {minority_n}). Try Majority Undersampling instead.")
+    return minority_n
+
+def _numeric_feature_matrix(df: pd.DataFrame, feature_cols: List[str], method_label: str) -> pd.DataFrame:
+    """ADASYN / Borderline-SMOTE / KMeans-SMOTE have no categorical-aware
+    counterpart in imbalanced-learn (unlike plain SMOTE, which upgrades to
+    SMOTENC below) — every feature column must already be numeric. In this
+    app's normal pipeline that's already true by the time a dataset reaches
+    Sampling (Scaling & Encoding runs first), so this only fires if a user
+    jumped ahead, or picked a still-raw categorical as a feature. NaN is
+    filled defensively for the synthesis step only — every ORIGINAL row
+    keeps its real values untouched in the output; this only affects what a
+    newly-invented synthetic row's neighbors are computed from."""
+    non_numeric = [c for c in feature_cols if not pd.api.types.is_numeric_dtype(df[c])]
+    if non_numeric:
+        raise HTTPException(400,
+            f"{method_label} needs every feature column to already be numeric — found "
+            f"non-numeric column(s): {', '.join(non_numeric[:5])}{'…' if len(non_numeric) > 5 else ''}. "
+            "Encode them on the Scaling & Encoding page first, or use Minority Oversampling "
+            "(SMOTE), which supports mixed numeric/categorical data.")
+    X = df[feature_cols].copy()
+    for c in feature_cols:
+        if X[c].isna().any():
+            X[c] = X[c].fillna(X[c].median())
+    return X
+
+def _reassemble(df: pd.DataFrame, target_col: str, X_res, y_res) -> pd.DataFrame:
+    """Shared tail end for every oversampling method: reattach the
+    resampled target column and restore the ORIGINAL column order — X_res
+    only carries feature columns, so without this the target column would
+    land at the end regardless of where it started in the source file."""
+    result = X_res.copy()
+    result[target_col] = y_res.values if hasattr(y_res, "values") else y_res
+    return result[df.columns.tolist()]
+
 def _smote_oversample(df: pd.DataFrame, target_col: str) -> pd.DataFrame:
     """Real SMOTE (Synthetic Minority Over-sampling Technique) via
     imbalanced-learn — generates genuinely synthetic minority-class rows by
     interpolating between each minority sample and its nearest same-class
-    neighbors, rather than just duplicating existing rows (which is what
-    the "oversample" method did before — plain resample-with-replacement).
+    neighbors, rather than just duplicating existing rows (that's what
+    Random Oversampling below does instead).
 
     Uses SMOTENC instead of plain SMOTE whenever any OTHER column is
     non-numeric: base SMOTE's neighbor-interpolation math only works on
     continuous features, so a mixed dataset (e.g. a numeric + categorical
     feature set) needs SMOTENC, which samples categorical values from
-    neighbors rather than trying to interpolate them.
+    neighbors rather than trying to interpolate them. The 3 variants below
+    (ADASYN/Borderline-SMOTE/KMeans-SMOTE) have no NC equivalent in
+    imbalanced-learn, so they hard-require numeric features instead — see
+    _numeric_feature_matrix().
     """
     feature_cols = [c for c in df.columns if c != target_col]
     if not feature_cols:
         raise HTTPException(400, "SMOTE needs at least one feature column besides the target.")
 
     y = df[target_col]
-    counts = y.value_counts()
-    minority_n = int(counts.min())
-    if minority_n < 2:
-        raise HTTPException(400,
-            f"SMOTE needs at least 2 rows in the minority class to interpolate between "
-            f"(the smallest class here has {minority_n}). Try Majority Undersampling instead.")
+    minority_n = _minority_class_count(df, target_col, "SMOTE")
     k_neighbors = max(1, min(5, minority_n - 1))
 
     X = df[feature_cols].copy()
-    # SMOTE/SMOTENC can't operate on NaN features — filled defensively for
-    # the synthesis step only. Every ORIGINAL row keeps its real values
-    # untouched in the output; this only affects what a newly-invented
-    # synthetic row's neighbors are computed from.
     for c in feature_cols:
         if X[c].isna().any():
             if pd.api.types.is_numeric_dtype(X[c]):
@@ -186,9 +225,82 @@ def _smote_oversample(df: pd.DataFrame, target_col: str) -> pd.DataFrame:
              if cat_idx else SMOTE(k_neighbors=k_neighbors, random_state=42))
 
     X_res, y_res = smote.fit_resample(X, y)
-    result = X_res.copy()
-    result[target_col] = y_res.values
-    return result[df.columns.tolist()]
+    return _reassemble(df, target_col, X_res, y_res)
+
+def _random_oversample(df: pd.DataFrame, target_col: str) -> pd.DataFrame:
+    """Random Oversampling — duplicates existing minority rows at random
+    until class sizes match. No interpolation, no distance metric, so
+    (unlike the 4 methods below) it has no numeric-feature restriction at
+    all: it just re-selects existing row indices. Simple and fast, but
+    exact duplicate rows can cause a model to overfit on them."""
+    feature_cols = [c for c in df.columns if c != target_col]
+    if not feature_cols:
+        raise HTTPException(400, "Random Oversampling needs at least one feature column besides the target.")
+    X, y = df[feature_cols].copy(), df[target_col]
+    ros = RandomOverSampler(random_state=42)
+    X_res, y_res = ros.fit_resample(X, y)
+    return _reassemble(df, target_col, X_res, y_res)
+
+def _adasyn_oversample(df: pd.DataFrame, target_col: str) -> pd.DataFrame:
+    """ADASYN (Adaptive Synthetic Sampling) — like SMOTE, but generates MORE
+    synthetic samples in the regions where the minority class is hardest to
+    learn (where majority-class density is highest, i.e. near the decision
+    boundary) rather than spreading them evenly across the whole minority
+    class. Note the parameter name: imbalanced-learn's ADASYN calls it
+    n_neighbors, not k_neighbors like every other method here — a real API
+    difference, not a typo."""
+    feature_cols = [c for c in df.columns if c != target_col]
+    if not feature_cols:
+        raise HTTPException(400, "ADASYN needs at least one feature column besides the target.")
+    minority_n = _minority_class_count(df, target_col, "ADASYN")
+    n_neighbors = max(1, min(5, minority_n - 1))
+    X = _numeric_feature_matrix(df, feature_cols, "ADASYN")
+    y = df[target_col]
+    adasyn = ADASYN(n_neighbors=n_neighbors, random_state=42)
+    X_res, y_res = adasyn.fit_resample(X, y)
+    return _reassemble(df, target_col, X_res, y_res)
+
+def _borderline_smote_oversample(df: pd.DataFrame, target_col: str) -> pd.DataFrame:
+    """Borderline-SMOTE — only interpolates from minority samples already
+    "in danger" of misclassification (close to the class boundary), instead
+    of the whole minority class like plain SMOTE. m_neighbors controls how
+    "in danger" is decided (searched across ALL classes, not just the
+    minority one), so it's clamped against the full row count rather than
+    the minority count that bounds k_neighbors."""
+    feature_cols = [c for c in df.columns if c != target_col]
+    if not feature_cols:
+        raise HTTPException(400, "Borderline-SMOTE needs at least one feature column besides the target.")
+    minority_n = _minority_class_count(df, target_col, "Borderline-SMOTE")
+    k_neighbors = max(1, min(5, minority_n - 1))
+    m_neighbors = max(k_neighbors, min(10, len(df) - 1))
+    X = _numeric_feature_matrix(df, feature_cols, "Borderline-SMOTE")
+    y = df[target_col]
+    bsmote = BorderlineSMOTE(k_neighbors=k_neighbors, m_neighbors=m_neighbors, random_state=42)
+    X_res, y_res = bsmote.fit_resample(X, y)
+    return _reassemble(df, target_col, X_res, y_res)
+
+def _kmeans_smote_oversample(df: pd.DataFrame, target_col: str) -> pd.DataFrame:
+    """KMeans-SMOTE — clusters the data first, then only generates SMOTE
+    samples inside clusters that are dense and minority-heavy enough to
+    count as "safe", avoiding the noisy/isolated regions plain SMOTE can
+    wander into. Needs more real cluster structure in the data than the
+    other variants — imbalanced-learn raises a clear RuntimeError ("no
+    clusters found...") when a dataset doesn't have well-separated clusters
+    to work with. That's the algorithm correctly refusing to generate
+    samples in bad regions, not a bug — it surfaces to the caller as-is
+    (same as every other unexpected error in this router) rather than being
+    silently caught, since papering over it would defeat the entire point
+    of this method being more careful than plain SMOTE."""
+    feature_cols = [c for c in df.columns if c != target_col]
+    if not feature_cols:
+        raise HTTPException(400, "KMeans-SMOTE needs at least one feature column besides the target.")
+    minority_n = _minority_class_count(df, target_col, "KMeans-SMOTE")
+    k_neighbors = max(1, min(5, minority_n - 1))
+    X = _numeric_feature_matrix(df, feature_cols, "KMeans-SMOTE")
+    y = df[target_col]
+    ksmote = KMeansSMOTE(k_neighbors=k_neighbors, random_state=42)
+    X_res, y_res = ksmote.fit_resample(X, y)
+    return _reassemble(df, target_col, X_res, y_res)
 
 # Methods whose entire point is a specific row ORDER (systematic — every
 # k-th row; the two time-series-safe methods) — shuffling their result
@@ -219,7 +331,8 @@ def do_sampling(df: pd.DataFrame, method: str, sample_pct: float,
         frac = max(0.0, min(1.0, sample_pct / 100))
         result = _sample_per_group(df, col, lambda g: g.sample(frac=frac, random_state=42))
 
-    elif method in ("oversample", "undersample"):
+    elif method in ("oversample", "undersample", "random_oversample",
+                    "adasyn", "borderline_smote", "kmeans_smote"):
         col = target_col or stratify_col
         if not col or col not in df.columns:
             raise HTTPException(400, "A target column is required for over/undersampling.")
@@ -229,10 +342,16 @@ def do_sampling(df: pd.DataFrame, method: str, sample_pct: float,
         if method == "undersample":
             target_n = int(counts.min())
             result = _sample_per_group(df, col, lambda g: g.sample(n=target_n, random_state=42))
-        else:  # oversample — real SMOTE (synthetic interpolation), not
-               # duplicate-with-replacement. See _smote_oversample's own
-               # docstring for why.
+        elif method == "oversample":       # real SMOTE (synthetic interpolation)
             result = _smote_oversample(df, col)
+        elif method == "random_oversample":  # exact-duplicate minority rows
+            result = _random_oversample(df, col)
+        elif method == "adasyn":           # synthetic samples focused on hardest regions
+            result = _adasyn_oversample(df, col)
+        elif method == "borderline_smote":  # synthetic samples focused on the class boundary
+            result = _borderline_smote_oversample(df, col)
+        else:  # kmeans_smote — synthetic samples inside safe, dense clusters
+            result = _kmeans_smote_oversample(df, col)
 
     elif method == "systematic":
         step = max(1, int(100 / sample_pct)) if sample_pct and sample_pct < 100 else 1
@@ -292,6 +411,10 @@ METHOD_LABELS = {
     "stratified":      lambda pct: f"Stratified Undersampling ({pct:.0f}% per class)",
     "undersample":      lambda pct: "Majority Undersampling (majority → minority class size)",
     "oversample":       lambda pct: "Minority Oversampling — SMOTE (synthetic samples up to majority class size)",
+    "random_oversample": lambda pct: "Random Oversampling (duplicates minority rows up to majority class size)",
+    "adasyn":            lambda pct: "ADASYN (synthetic samples focused on the hardest-to-learn minority regions)",
+    "borderline_smote":  lambda pct: "Borderline-SMOTE (synthetic samples focused on the class boundary)",
+    "kmeans_smote":       lambda pct: "KMeans-SMOTE (synthetic samples inside safe, dense minority clusters)",
     "systematic":       lambda pct: f"Systematic Sampling (every {max(1, int(100/pct)) if pct and pct < 100 else 1}th row)",
     "cluster":          lambda pct: "Cluster Sampling",
     "reservoir":        lambda pct: "Reservoir Sampling",
@@ -310,7 +433,9 @@ class ProfileReq(BaseModel):
 
 class RunSamplingReq(BaseModel):
     file_path:       str
-    method:          str            # simple_random | stratified | oversample | undersample |
+    method:          str            # simple_random | stratified | undersample |
+                                     # oversample | random_oversample | adasyn |
+                                     # borderline_smote | kmeans_smote |
                                      # systematic | cluster | reservoir | importance |
                                      # DATE_RANGE | SYSTEMATIC_TIME
     sample_pct:      float = 20.0   # used for simple_random / stratified / systematic / importance

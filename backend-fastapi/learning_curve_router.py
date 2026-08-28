@@ -361,8 +361,21 @@ def compute_learning_curve(req: ComputeReq):
         # per class/fold, capped below 1.0 so linspace never runs backwards
         # on a small dataset (a real crash risk in the original formula —
         # 3*cv_folds/n_total can legitimately exceed 1.0 on a tiny dataset).
-        start_frac = min(0.9, max(0.15, min_needed / n_total))
+        # Floor lowered 0.15->0.03: the true safety constraint is entirely
+        # `min_needed/n_total` (enough samples per fold) - 0.15 was an
+        # extra, unnecessarily generous cosmetic minimum on top of that,
+        # which is exactly why the curve always started a third of the way
+        # into the chart regardless of dataset size. 0.03 still protects
+        # tiny datasets (min_needed/n_total wins there anyway) while
+        # starting close to the y-axis on any normally-sized one.
+        start_frac = min(0.9, max(0.03, min_needed / n_total))
         train_sizes_rel = np.linspace(start_frac, 1.0, req.n_sizes)
+        # Percentage of the per-fold training portion each step represents -
+        # by construction (np.linspace ending at 1.0) this ALWAYS spans up
+        # to exactly 100%, unlike the absolute sample counts below (which
+        # depend on dataset size and cv_folds, and can never universally
+        # reach a fixed "100"). This is what the frontend's x-axis plots.
+        training_pct = [round(float(v) * 100, 1) for v in train_sizes_rel]
 
         if task_type == "classification":
             metrics = ["accuracy", "f1_weighted", "precision_weighted", "recall_weighted"]
@@ -394,6 +407,7 @@ def compute_learning_curve(req: ComputeReq):
                 val_std    = [safe_round(v) for v in val_sc.std(axis=1)]
                 curves[key] = {
                     "training_sizes": [int(s) for s in sizes_abs],
+                    "training_pct": training_pct,
                     "train_mean": train_mean, "train_std": train_std,
                     "val_mean": val_mean, "val_std": val_std,
                     "train_smooth": ema_smooth(train_mean), "val_smooth": ema_smooth(val_mean),
@@ -416,6 +430,8 @@ def compute_learning_curve(req: ComputeReq):
         plateau_idx = pattern.get("plateau_idx", len(primary.get("training_sizes", [0])) - 1)
         sizes_list = primary.get("training_sizes", [n_total])
         optimal_size = sizes_list[min(plateau_idx, len(sizes_list) - 1)]
+        pct_list = primary.get("training_pct", [])
+        optimal_pct = pct_list[min(plateau_idx, len(pct_list) - 1)] if pct_list else None
 
         suggestion = generate_suggestion(pattern, n_total, req.train_ratio, optimal_size)
         pattern_descs = PATTERN_DESCRIPTIONS.get(pattern["type"], PATTERN_DESCRIPTIONS["unknown"])
@@ -425,6 +441,7 @@ def compute_learning_curve(req: ComputeReq):
             "curves": curves,
             "pattern": pattern,
             "optimal_size": int(optimal_size),
+            "optimal_pct": optimal_pct,
             "n_total": n_total,
             "actual_train_n": int(n_total * req.train_ratio),
             "train_ratio": req.train_ratio,

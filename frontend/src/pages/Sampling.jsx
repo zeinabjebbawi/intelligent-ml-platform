@@ -62,10 +62,14 @@ Sampling strategies:
 2. Stratified: use when you need to preserve exact class ratios during size reduction. (pattern exists)
 3. Undersampling: use when the majority class dominates and you want to balance quickly without creating synthetic data.
 4. Minority Oversampling (SMOTE): use when the minority class is small and undersampling would leave too few rows to train on — generates synthetic minority samples instead of just duplicating existing ones.
-5. Systematic Sampling: selects every k-th row from an ordered dataset. Fast and deterministic.
-6. Cluster Sampling: divides data into groups (clusters) and randomly selects whole clusters.
-7. Reservoir Sampling: samples a fixed number of items from an infinite stream in one pass — no need to know the total size.
-8. Importance Sampling: evaluates a target distribution using samples drawn from a different, accessible distribution.
+5. Random Oversampling: use when you need the fastest, simplest class balance and can tolerate exact duplicate rows — duplicates existing minority samples until class sizes match. Simple, but repeated copies can cause overfitting.
+6. ADASYN: use when the minority class has regions that are especially hard to learn — generates more synthetic samples near the decision boundary, where the classes overlap most, instead of spreading them evenly like SMOTE.
+7. Borderline-SMOTE: use when misclassifications cluster right at the class boundary — generates synthetic samples only from minority points already "in danger" of being misclassified, rather than the whole minority class.
+8. KMeans-SMOTE: use when the minority class has distinct sub-groups — clusters the data first, then generates synthetic samples only inside dense, safe clusters, avoiding noisy or isolated regions plain SMOTE can wander into.
+9. Systematic Sampling: selects every k-th row from an ordered dataset. Fast and deterministic.
+10. Cluster Sampling: divides data into groups (clusters) and randomly selects whole clusters.
+11. Reservoir Sampling: samples a fixed number of items from an infinite stream in one pass — no need to know the total size.
+12. Importance Sampling: evaluates a target distribution using samples drawn from a different, accessible distribution.
 
 ⚠ Time-series caveat: If your data has temporal ordering (dates, timestamps), random shuffling destroys the sequence. Use a chronological split instead. This page will warn you if a datetime column is detected.
 
@@ -536,6 +540,30 @@ export default function SamplingPage({
       guidance: 'Best when minority class is very small. Watch for overfitting.',
       showSlider: false, showStratify: false, showTargetCol: true,
     },
+    random_oversample: {
+      label: 'Random Oversampling', icon: '🔁',
+      desc: 'Duplicates existing minority rows at random until class sizes match — no synthesis, just exact copies.',
+      guidance: 'Best for a quick balance fix. Simple and fast, but exact duplicates can cause overfitting.',
+      showSlider: false, showStratify: false, showTargetCol: true,
+    },
+    adasyn: {
+      label: 'ADASYN', icon: '🧭',
+      desc: 'Like SMOTE, but generates more synthetic samples near the decision boundary — where classes overlap most.',
+      guidance: 'Best when parts of the minority class are especially hard to learn, not just underrepresented.',
+      showSlider: false, showStratify: false, showTargetCol: true,
+    },
+    borderline_smote: {
+      label: 'Borderline-SMOTE', icon: '🚧',
+      desc: 'Generates synthetic samples only from minority points already "in danger" of misclassification.',
+      guidance: 'Best when misclassifications cluster right at the class boundary, not throughout the minority class.',
+      showSlider: false, showStratify: false, showTargetCol: true,
+    },
+    kmeans_smote: {
+      label: 'KMeans-SMOTE', icon: '🧩',
+      desc: 'Clusters the data first, then generates synthetic samples only inside dense, safe cluster regions.',
+      guidance: 'Best when the minority class has distinct sub-groups. Needs real cluster structure to work well.',
+      showSlider: false, showStratify: false, showTargetCol: true,
+    },
     systematic: {
       label: 'Systematic Sampling', icon: '⏭',
       desc: 'Selects every k-th row from the dataset. Fast and deterministic. Order-preserving.',
@@ -561,6 +589,19 @@ export default function SamplingPage({
       showSlider: false, showStratify: false, showTargetCol: false,
     },
   }
+
+  // Grey section headers inside the scrollable method grid, purely
+  // presentational — grouped by what the method actually does to row
+  // count (shrinks it vs. grows it), not by how it's implemented. Every
+  // key here must exist in METHOD_INFO; the grid render below still shows
+  // every card exactly as before (grayed out + disabled) once
+  // timeSeriesMode is true — grouping doesn't change that.
+  const METHOD_GROUPS = [
+    { header: 'Undersampling & Size Reduction',
+      keys: ['simple_random', 'stratified', 'undersample', 'systematic', 'cluster', 'reservoir', 'importance'] },
+    { header: 'Oversampling',
+      keys: ['oversample', 'random_oversample', 'adasyn', 'borderline_smote', 'kmeans_smote'] },
+  ]
 
   // Time-safe methods — only ever offered (as clickable, non-grayed cards)
   // once profile.has_time_warning is true; every method above becomes
@@ -597,7 +638,7 @@ export default function SamplingPage({
 
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'sampling'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'sampling'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ textAlign: 'center', padding: '80px 0', color: C.muted }}>
         <div style={{ fontSize: 28, marginBottom: 12,
           animation: 'spin 1s linear infinite', display: 'inline-block' }}>⚙</div>
@@ -609,7 +650,7 @@ export default function SamplingPage({
 
   if (error) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'sampling'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'sampling'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`,
         borderRadius: 12, padding: 20, color: C.danger, margin: 20 }}>⚠ {error}</div>
     </div>
@@ -621,7 +662,7 @@ export default function SamplingPage({
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', paddingBottom: 60 }}>
-      <TopNav active={active || 'sampling'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'sampling'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
       <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`,
@@ -828,35 +869,47 @@ export default function SamplingPage({
                       </button>
                     )
                   })}
-                  {Object.entries(METHOD_INFO).map(([key, info]) => {
-                    const active = method === key
-                    return (
-                      <button key={key}
-                        disabled={timeSeriesMode}
-                        onClick={() => { setMethod(key); setResults(null); setPhase('config') }}
-                        style={{
-                          padding: '10px 8px', borderRadius: 10,
-                          cursor: timeSeriesMode ? 'not-allowed' : 'pointer',
-                          border: `1.5px solid ${active && !timeSeriesMode ? C.primary : C.border}`,
-                          background: active && !timeSeriesMode ? C.primarySoft : C.card,
-                          textAlign: 'left', transition: 'all 0.15s',
-                          opacity: timeSeriesMode ? 0.35 : 1,
-                          pointerEvents: timeSeriesMode ? 'none' : 'auto',
-                        }}>
-                        <div style={{ fontSize: 14, marginBottom: 2 }}>{info.icon}</div>
-                        <div style={{ fontSize: 12, fontWeight: 700,
-                          color: active && !timeSeriesMode ? C.primary : C.text }}>{info.label}</div>
-                        <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>
-                          {info.desc}
-                        </div>
-                        {timeSeriesMode && (
-                          <div style={{ fontSize: 9, fontWeight: 700, color: C.danger, marginTop: 4 }}>
-                            ⚠ Not safe for time-series
+                  {METHOD_GROUPS.flatMap(group => [
+                    <div key={`hdr-${group.header}`} style={{
+                      gridColumn: '1 / -1', fontSize: 10, fontWeight: 700,
+                      textTransform: 'uppercase', letterSpacing: 1.5, color: C.muted,
+                      paddingTop: 10, paddingBottom: 4, marginBottom: 2,
+                      borderBottom: `1px solid ${C.border}`,
+                      opacity: timeSeriesMode ? 0.35 : 1,
+                    }}>
+                      {group.header}
+                    </div>,
+                    ...group.keys.map(key => {
+                      const info = METHOD_INFO[key]
+                      const active = method === key
+                      return (
+                        <button key={key}
+                          disabled={timeSeriesMode}
+                          onClick={() => { setMethod(key); setResults(null); setPhase('config') }}
+                          style={{
+                            padding: '10px 8px', borderRadius: 10,
+                            cursor: timeSeriesMode ? 'not-allowed' : 'pointer',
+                            border: `1.5px solid ${active && !timeSeriesMode ? C.primary : C.border}`,
+                            background: active && !timeSeriesMode ? C.primarySoft : C.card,
+                            textAlign: 'left', transition: 'all 0.15s',
+                            opacity: timeSeriesMode ? 0.35 : 1,
+                            pointerEvents: timeSeriesMode ? 'none' : 'auto',
+                          }}>
+                          <div style={{ fontSize: 14, marginBottom: 2 }}>{info.icon}</div>
+                          <div style={{ fontSize: 12, fontWeight: 700,
+                            color: active && !timeSeriesMode ? C.primary : C.text }}>{info.label}</div>
+                          <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>
+                            {info.desc}
                           </div>
-                        )}
-                      </button>
-                    )
-                  })}
+                          {timeSeriesMode && (
+                            <div style={{ fontSize: 9, fontWeight: 700, color: C.danger, marginTop: 4 }}>
+                              ⚠ Not safe for time-series
+                            </div>
+                          )}
+                        </button>
+                      )
+                    }),
+                  ])}
                 </div>
               </div>
               <div style={{ marginTop: 10, padding: '8px 12px',

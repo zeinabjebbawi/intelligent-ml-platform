@@ -101,10 +101,16 @@ REDUNDANCY_THRESHOLD = 0.80  # matches the Redundancy vs Relevance chart's own 0
 
 def signal_tier(importance: float) -> str:
     """The feature's signal strength w.r.t. the target, on its own —
-    independent of redundancy. Three tiers, always one of these three."""
-    if importance >= 0.3:
+    independent of redundancy. Three tiers, always one of these three.
+    Thresholds match the platform-wide Weak/Moderate/Strong rule (0-0.3 /
+    0.3-0.6 / 0.6-1.0) also used by the Redundancy vs Relevance chart's own
+    background zones (frontend REL_WEAK_MAX/REL_MOD_MAX) - this function
+    used to read 0.1/0.3, a stale pair of thresholds from before that rule
+    existed, which made the scatter's dots land in a different tier than
+    the zone they were visually sitting inside."""
+    if importance >= 0.6:
         return "strong"
-    if importance >= 0.1:
+    if importance >= 0.3:
         return "moderate"
     return "weak"
 
@@ -156,17 +162,131 @@ def compute_categorical_importance(df: pd.DataFrame, col: str, target_series: pd
     except Exception:
         return 0.0, None, test_name
 
+def _analyze_for_clustering(df: pd.DataFrame, oh_groups: Dict[str, List[str]],
+                             col_to_group: Dict[str, str]) -> dict:
+    """Feature analysis for clustering (K-Means) — no target column exists,
+    so there is no feature-target correlation/importance concept at all.
+    The only thing that matters is inter-feature REDUNDANCY: two highly
+    correlated features (e.g. PetalLength/PetalWidth, r=0.896) both still
+    contribute independently to K-Means' Euclidean distance calculation,
+    effectively double-weighting that one axis and pulling cluster centers
+    toward it, distorting cluster shapes. Keeping one of a redundant pair
+    (or combining them in Feature Engineering) removes that distortion.
+
+    Reuses the exact same one-hot/correlation/redundancy machinery as the
+    supervised analyze() path — only the target-dependent pieces (Pearson/
+    MI importance, signal tier, top-2 scatter, pairplot, RvR scatter) are
+    dropped, since none of them mean anything without a target. Returns the
+    same top-level keys as the supervised response (with the target-only
+    ones null/empty) so the frontend's response handling doesn't need a
+    structurally different code path, only different RENDERING.
+    """
+    num_features = df.select_dtypes(include=[np.number]).columns.tolist()
+
+    corr_df = df[num_features].fillna(0).corr().round(3)
+    corr_matrix_out = {
+        "labels": list(corr_df.columns),
+        "matrix": [[safe_num(v, 0.0) for v in row] for row in corr_df.values.tolist()],
+    }
+
+    # Multicollinearity pairs — identical logic/threshold to the supervised
+    # path (this has never depended on a target: it's purely feature-vs-
+    # feature), just computed here against clustering's own num_features.
+    multicol_pairs = []
+    seen = set()
+    for i, a in enumerate(corr_df.columns):
+        for j, b in enumerate(corr_df.columns):
+            if i >= j:
+                continue
+            r = safe_num(corr_df.iloc[i, j], 0.0)
+            key = tuple(sorted([a, b]))
+            if key in seen:
+                continue
+            seen.add(key)
+            if abs(r) >= 0.85:
+                is_one_hot_pair = (col_to_group.get(a) == col_to_group.get(b)
+                                   and col_to_group.get(a) is not None)
+                multicol_pairs.append({
+                    "feature_a": a, "feature_b": b, "correlation": r,
+                    "is_one_hot": is_one_hot_pair,
+                    "severity": "expected" if is_one_hot_pair else "warning",
+                })
+
+    features_out = []
+    for col in num_features:
+        other_feats = [c for c in num_features if c != col]
+        redundancy  = compute_redundancy(corr_df, col, other_feats)
+        grp         = col_to_group.get(col)
+        is_oh       = grp is not None
+        is_red      = redundancy >= REDUNDANCY_THRESHOLD
+        features_out.append({
+            "name":           col,
+            "rank":           0,  # assigned below, sorted by redundancy
+            "type":           feature_type_label(df[col], is_oh),
+            "pearson":        None,
+            "importance":     None,
+            "importance_mi":  None,
+            "redundancy":     redundancy,
+            "redundancy_na":  False,
+            "signal_tier":    None,  # no target -> no signal-tier concept
+            "is_redundant":   is_red,
+            "recommendation": "redundant_high" if is_red else "independent",
+            "one_hot_group":  grp,
+            "is_one_hot":     is_oh,
+            "unencoded":      False,
+            "stat_test":      None,
+            "p_value":        None,
+        })
+
+    # Most-redundant-first — the ranking that actually matters when there's
+    # no target to rank by relevance instead.
+    features_out.sort(key=lambda f: f["redundancy"], reverse=True)
+    for i, f in enumerate(features_out):
+        f["rank"] = i + 1
+
+    redundancy_bar = [{"feature": f["name"], "redundancy": f["redundancy"],
+                        "recommendation": f["recommendation"]} for f in features_out]
+
+    n_redundant = len([p for p in multicol_pairs if p["severity"] == "warning"])
+
+    return {
+        "features":            features_out,
+        "one_hot_groups":      oh_groups,
+        "correlation_matrix":  corr_matrix_out,
+        "multicol_pairs":      multicol_pairs,
+        "top_2":               {"feature_1": None, "feature_2": None, "scatter": []},
+        "pairplot_data":       {},
+        "rdv_scatter":         [],
+        "redundancy_bar":      redundancy_bar,
+        "task_type":           "clustering",
+        "target_column":       None,
+        "n_target_classes":    0,
+        "target_is_multiclass_nominal": False,
+        "row_count":           len(df),
+        "total_features":      len(features_out),
+        "n_numeric_features":  len(num_features),
+        "n_unencoded_features": 0,
+        "n_strong":            0,
+        "n_weak":              0,
+        "n_multicol_warnings": n_redundant,
+        "is_clustering":       True,
+    }
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MODELS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AnalyzeReq(BaseModel):
     file_path:     str
-    target_column: str
+    # Optional — a clustering dataset (K-Means) has no target column at all.
+    # task_type lets the frontend say "clustering" explicitly rather than
+    # this endpoint having to guess from an empty target_column alone.
+    target_column: Optional[str] = None
+    task_type:     Optional[str] = None
 
 class ApplyReq(BaseModel):
     file_path:        str
-    target_column:    str
+    target_column:    Optional[str] = None
     features_to_keep: List[str]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,15 +305,24 @@ def analyze(req: AnalyzeReq):
         df     = read_df(req.file_path)
         target = req.target_column
 
+        # One-hot groups (always numeric 0/1 columns, so never overlaps with
+        # the "leftover raw categorical" set built below) — computed before
+        # branching since it's identical either way, never depends on target.
+        oh_groups = detect_one_hot_groups(df)
+        col_to_group = {col: grp for grp, cols in oh_groups.items() for col in cols}
+
+        # Clustering (K-Means) has no target column — there is no feature-
+        # target correlation to compute at all, only inter-feature
+        # REDUNDANCY. task_type is authoritative when the frontend sends it
+        # (set explicitly on Upload for an unsupervised dataset); an empty
+        # target_column is the fallback signal for callers that don't.
+        if req.task_type == "clustering" or not target:
+            return _analyze_for_clustering(df, oh_groups, col_to_group)
+
         if target not in df.columns:
             raise HTTPException(400, f"Target column '{target}' not found.")
 
         task_type = detect_task_type(df[target])
-
-        # One-hot groups (always numeric 0/1 columns, so never overlaps with
-        # the "leftover raw categorical" set built below)
-        oh_groups = detect_one_hot_groups(df)
-        col_to_group = {col: grp for grp, cols in oh_groups.items() for col in cols}
 
         all_features = [c for c in df.columns if c != target]
         num_features = df[all_features].select_dtypes(include=[np.number]).columns.tolist()

@@ -1335,7 +1335,7 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
       fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
       transition: 'background 0.2s',
     }}>
-      <TopNav active={active || 'upload'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'upload'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ maxWidth: 1000, margin: '0 auto', padding: '28px 32px 64px' }}>
 
         {/* Two-column region: left content dims when drawer is open, and

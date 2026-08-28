@@ -16,7 +16,7 @@
  * own (a pasted first draft invented its own indigo palette from scratch —
  * not used, see memory: theme system discipline).
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
 import VersionsBar from '../components/VersionsBar'
@@ -56,29 +56,97 @@ const callBatch = async (modelPklPath, taskType, file) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // INFO ICON — same click-to-open ⓘ popover pattern as the rest of the pipeline.
 // ─────────────────────────────────────────────────────────────────────────────
-const InfoIcon = ({ content, width = 320 }) => {
+// Two content modes (same convention as TrainTest.jsx's InfoIcon):
+// `content` (plain pre-line string) for a short paragraph or two, or
+// `items` (array of {label, desc}, plus optional `itemsTitle`/`footer`)
+// for a wider, bold-labeled multi-column popover — used for every
+// explanation on this page now, since a single undifferentiated paragraph
+// reads as one flat wall of text no matter how it's organized internally.
+const InfoIcon = ({ content, items, itemsTitle, footer, width = 320 }) => {
   const { C } = useTheme()
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const popupRef = useRef(null)
+  const isWide = !!items
+  const popupW = isWide ? 560 : width
+
+  // Clamping `left` against a known fixed width is easy, but clamping `top`
+  // needs the popup's actual rendered HEIGHT (content-driven, unknown until
+  // it renders) - this measures the just-mounted popup via popupRef and
+  // corrects `top` before the browser paints (useLayoutEffect runs
+  // synchronously pre-paint, so there's no visible flicker), instead of
+  // letting a tall popup clip past the viewport bottom or forcing internal
+  // scroll. Old version was `position:'absolute', left:22, top:-6` with no
+  // clamping at all, which clipped/forced a page-level horizontal scrollbar
+  // whenever the icon sat near a panel's right edge.
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    // Measure the popup's REAL rendered box, not the declared width -
+    // these divs use default content-box sizing, so padding/border add on
+    // top of it. offsetWidth/offsetHeight report the true box.
+    const w = popupRef.current?.offsetWidth || popupW
+    const h = popupRef.current?.offsetHeight || 0
+    const left = Math.max(12, Math.min(r.right + 8, window.innerWidth - w - 12))
+    const top  = Math.max(12, Math.min(r.top - 6, window.innerHeight - h - 12))
+    setPos({ left, top })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   return (
     <span style={{ position: 'relative', display: 'inline-block', verticalAlign: 'middle' }}>
-      <button onClick={() => setOpen(o => !o)} title="Learn more"
+      <button ref={btnRef} onClick={() => setOpen(o => !o)} title="Learn more"
         style={{
-          width: 17, height: 17, borderRadius: '50%', border: `1.5px solid ${C.primary}`,
-          background: open ? C.primary : 'transparent', color: open ? 'white' : C.primary,
-          fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'inline-flex',
-          alignItems: 'center', justifyContent: 'center', marginLeft: 6, flexShrink: 0, padding: 0,
-        }}>ⓘ</button>
+          width: 18, height: 18, border: 'none', background: 'none', padding: 0,
+          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          marginLeft: 6, flexShrink: 0, lineHeight: 1, transition: 'all 0.15s',
+        }}>
+        <svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="7.25" fill={open ? C.primary : C.primarySoft} stroke={C.primary} strokeWidth="1.5" />
+          <circle cx="9" cy="5.7" r="1.05" fill={open ? '#fff' : C.primary} />
+          <rect x="8.15" y="8.1" width="1.7" height="5" rx="0.85" fill={open ? '#fff' : C.primary} />
+        </svg>
+      </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
-          <div style={{
-            position: 'absolute', left: 22, top: -6, zIndex: 999,
-            background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
-            padding: '14px 16px', width, boxShadow: shadow, fontSize: 12,
-            color: C.text, lineHeight: 1.7, whiteSpace: 'pre-line',
-          }}>
-            {content}
-          </div>
+          {isWide ? (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '16px 20px', width: 560, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow,
+              fontSize: 12, color: C.text,
+            }}>
+              {itemsTitle && (
+                <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: 'uppercase',
+                  letterSpacing: 1, marginBottom: 12 }}>{itemsTitle}</div>
+              )}
+              <div style={{ columns: '2 230px', columnGap: 22 }}>
+                {items.map(it => (
+                  <div key={it.label} style={{ breakInside: 'avoid', marginBottom: 13 }}>
+                    <div style={{ fontWeight: 800, fontSize: 12.5, color: C.text, marginBottom: 3 }}>{it.label}</div>
+                    <div style={{ fontWeight: 400, fontSize: 11.5, color: C.muted, lineHeight: 1.55, whiteSpace: 'pre-line' }}>{it.desc}</div>
+                  </div>
+                ))}
+              </div>
+              {footer && (
+                <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px dashed ${C.border}`,
+                  fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: 1.6 }}>{footer}</div>
+              )}
+            </div>
+          ) : (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '14px 16px', width, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow, fontSize: 12,
+              color: C.text, lineHeight: 1.7, whiteSpace: 'pre-line',
+            }}>
+              {content}
+            </div>
+          )}
         </>
       )}
     </span>
@@ -129,7 +197,7 @@ const WaterfallChart = ({ data }) => {
   const xMax = Math.max(...allX) + Math.abs(final_value - base_value) * 0.12
   const xRange = xMax - xMin || 1
 
-  const W = 500, ROW_H = 30, PAD_L = 148, PAD_R = 18, PAD_T = 44, PAD_B = 28
+  const W = 640, ROW_H = 38, PAD_L = 162, PAD_R = 22, PAD_T = 48, PAD_B = 32
   const H = rows.length * ROW_H + PAD_T + PAD_B
 
   const xPx = v => PAD_L + ((v - xMin) / xRange) * (W - PAD_L - PAD_R)
@@ -142,10 +210,14 @@ const WaterfallChart = ({ data }) => {
   const POS = '#e0245e', NEG = '#1d9bf0'
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <svg width={W} height={H} style={{ display: 'block', minWidth: W }}>
-        <line x1={finalX} y1={PAD_T - 18} x2={finalX} y2={H - PAD_B} stroke={C.muted} strokeDasharray="4,3" strokeWidth={1} />
-        <text x={finalX + 4} y={PAD_T - 6} fontSize={10} fill={C.text} fontWeight={700}>f(x) = {final_value.toFixed(3)}</text>
+    <div style={{ overflowX: 'auto', flex: 1, display: 'flex', alignItems: 'flex-start' }}>
+      {/* width:100% + preserveAspectRatio="none" lets the chart genuinely
+          fill however wide its card is (the card grew once Prediction
+          shrank) instead of sitting fixed-width with dead space beside it -
+          height stays tied to actual row content via the H viewBox unit. */}
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block', minWidth: 420 }}>
+        <line x1={finalX} y1={PAD_T - 20} x2={finalX} y2={H - PAD_B} stroke={C.muted} strokeDasharray="4,3" strokeWidth={1} />
+        <text x={finalX + 4} y={PAD_T - 8} fontSize={12} fill={C.text} fontWeight={700}>f(x) = {final_value.toFixed(3)}</text>
 
         <line x1={baseX} y1={PAD_T} x2={baseX} y2={H - PAD_B} stroke={C.muted} strokeDasharray="4,3" strokeWidth={0.8} />
         <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_R} y2={H - PAD_B} stroke={C.border} strokeWidth={1} />
@@ -153,10 +225,10 @@ const WaterfallChart = ({ data }) => {
         {tickVals.map((v, i) => (
           <g key={i}>
             <line x1={xPx(v)} y1={H - PAD_B} x2={xPx(v)} y2={H - PAD_B + 3} stroke={C.border} />
-            <text x={xPx(v)} y={H - PAD_B + 13} textAnchor="middle" fontSize={8} fill={C.muted}>{v.toFixed(2)}</text>
+            <text x={xPx(v)} y={H - PAD_B + 15} textAnchor="middle" fontSize={9.5} fill={C.muted}>{v.toFixed(2)}</text>
           </g>
         ))}
-        <text x={baseX} y={H - PAD_B + 22} textAnchor="middle" fontSize={9} fill={C.muted}>E[f(x)] = {base_value.toFixed(3)}</text>
+        <text x={baseX} y={H - PAD_B + 26} textAnchor="middle" fontSize={10.5} fill={C.muted}>E[f(x)] = {base_value.toFixed(3)}</text>
 
         {bars.map((b, ri) => {
           const y = PAD_T + ri * ROW_H
@@ -165,28 +237,28 @@ const WaterfallChart = ({ data }) => {
           const barW = Math.abs(xB - xA) || 2
           const pos = b.shap > 0
           const barColor = pos ? POS : NEG
-          const shortName = b.name.length > 20 ? b.name.slice(0, 18) + '…' : b.name
+          const shortName = b.name.length > 24 ? b.name.slice(0, 22) + '…' : b.name
 
           return (
             <g key={b.name}>
               <line x1={PAD_L - 4} y1={y + ROW_H} x2={W - PAD_R} y2={y + ROW_H} stroke={C.border} strokeWidth={0.5} opacity={0.5} />
-              <text x={PAD_L - 8} y={y + ROW_H / 2 + 4} textAnchor="end" fontSize={10}>
+              <text x={PAD_L - 8} y={y + ROW_H / 2 + 4} textAnchor="end" fontSize={12}>
                 {b.value != null && <tspan fill={C.muted}>{b.value.toFixed(2)} = </tspan>}
                 <tspan fill={C.text} fontWeight="700" fontStyle={b.isAggregate ? 'italic' : 'normal'}>{shortName}</tspan>
               </text>
 
               <polygon
                 points={pos
-                  ? `${barX},${y + 4} ${barX + barW - 6},${y + 4} ${barX + barW},${y + ROW_H / 2} ${barX + barW - 6},${y + ROW_H - 4} ${barX},${y + ROW_H - 4}`
-                  : `${barX + 6},${y + 4} ${barX + barW},${y + 4} ${barX + barW},${y + ROW_H - 4} ${barX + 6},${y + ROW_H - 4} ${barX},${y + ROW_H / 2}`}
+                  ? `${barX},${y + 5} ${barX + barW - 7},${y + 5} ${barX + barW},${y + ROW_H / 2} ${barX + barW - 7},${y + ROW_H - 5} ${barX},${y + ROW_H - 5}`
+                  : `${barX + 7},${y + 5} ${barX + barW},${y + 5} ${barX + barW},${y + ROW_H - 5} ${barX + 7},${y + ROW_H - 5} ${barX},${y + ROW_H / 2}`}
                 fill={barColor} opacity={b.isAggregate ? 0.55 : 0.9} />
 
-              {barW > 28 ? (
-                <text x={barX + barW / 2} y={y + ROW_H / 2 + 4} textAnchor="middle" fontSize={10} fontWeight="700" fill="white">
+              {barW > 32 ? (
+                <text x={barX + barW / 2} y={y + ROW_H / 2 + 4} textAnchor="middle" fontSize={12} fontWeight="700" fill="white">
                   {pos ? '+' : ''}{b.shap.toFixed(2)}
                 </text>
               ) : (
-                <text x={pos ? barX + barW + 3 : barX - 3} y={y + ROW_H / 2 + 4} textAnchor={pos ? 'start' : 'end'} fontSize={9} fontWeight="700" fill={barColor}>
+                <text x={pos ? barX + barW + 3 : barX - 3} y={y + ROW_H / 2 + 4} textAnchor={pos ? 'start' : 'end'} fontSize={11} fontWeight="700" fill={barColor}>
                   {pos ? '+' : ''}{b.shap.toFixed(2)}
                 </text>
               )}
@@ -201,13 +273,13 @@ const WaterfallChart = ({ data }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 3 — Prediction Display
 // ─────────────────────────────────────────────────────────────────────────────
-const PredictionDisplay = ({ prediction, batchData }) => {
+const PredictionDisplay = ({ prediction, batchData, compact }) => {
   const { C } = useTheme()
   if (!prediction && !batchData) return (
-    <div style={{ textAlign: 'center', padding: '50px 20px', color: C.muted }}>
-      <div style={{ fontSize: 36, marginBottom: 12 }}>🔮</div>
-      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6, color: C.text }}>No prediction yet</div>
-      <div style={{ fontSize: 12 }}>Adjust sliders on the left, or upload a CSV, to see results here.</div>
+    <div style={{ textAlign: 'center', padding: compact ? '14px 20px' : '50px 20px', color: C.muted }}>
+      <div style={{ fontSize: compact ? 22 : 36, marginBottom: compact ? 6 : 12 }}>🔮</div>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, color: C.text }}>No prediction yet</div>
+      <div style={{ fontSize: 11 }}>Adjust sliders on the left, or upload a CSV, to see results here.</div>
     </div>
   )
 
@@ -265,22 +337,22 @@ const PredictionDisplay = ({ prediction, batchData }) => {
     const pct = p.confidence != null ? Math.round(p.confidence * 100) : null
     const ranked = p.proba ? Object.entries(p.proba).sort((a, b) => b[1] - a[1]) : []
     return (
-      <div style={{ textAlign: 'center', padding: '16px 0' }}>
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.5, color: C.muted, marginBottom: 8 }}>Predicted Class</div>
-          <div style={{ fontSize: 44, fontWeight: 900, color: C.primary, lineHeight: 1 }}>{p.label}</div>
-          {pct != null && <div style={{ fontSize: 20, fontWeight: 700, color: C.success, marginTop: 6 }}>{pct}% confidence</div>}
+      <div style={{ textAlign: 'center', padding: compact ? '2px 0' : '16px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 10, marginBottom: compact ? 10 : 20, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: C.muted }}>Predicted Class</div>
+          <div style={{ fontSize: compact ? 26 : 44, fontWeight: 900, color: C.primary, lineHeight: 1 }}>{p.label}</div>
+          {pct != null && <div style={{ fontSize: compact ? 13 : 20, fontWeight: 700, color: C.success }}>{pct}% confidence</div>}
         </div>
         {ranked.length > 0 && (
           <div style={{ textAlign: 'left', maxWidth: 320, margin: '0 auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, color: C.muted, marginBottom: 10 }}>Class Probabilities</div>
+            <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, color: C.muted, marginBottom: compact ? 5 : 10 }}>Class Probabilities</div>
             {ranked.map(([cls, prob], i) => (
-              <div key={cls} style={{ marginBottom: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3, fontWeight: 600 }}>
+              <div key={cls} style={{ marginBottom: compact ? 5 : 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 2, fontWeight: 600 }}>
                   <span style={{ color: C.text }}>{cls}</span>
                   <span style={{ color: prob > 0.5 ? C.success : C.muted }}>{(prob * 100).toFixed(1)}%</span>
                 </div>
-                <div style={{ height: 10, background: C.faint, borderRadius: 5, overflow: 'hidden' }}>
+                <div style={{ height: compact ? 6 : 10, background: C.faint, borderRadius: 5, overflow: 'hidden' }}>
                   <div style={{ width: `${prob * 100}%`, height: '100%', background: i === 0 ? C.primary : C.muted, borderRadius: 5, transition: 'width 0.4s ease' }} />
                 </div>
               </div>
@@ -292,16 +364,16 @@ const PredictionDisplay = ({ prediction, batchData }) => {
   }
 
   if (p.type === 'regression') return (
-    <div style={{ textAlign: 'center', padding: '24px 0' }}>
-      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.5, color: C.muted, marginBottom: 8 }}>Predicted Value</div>
-      <div style={{ fontSize: 48, fontWeight: 900, color: C.primary }}>{p.value}</div>
+    <div style={{ textAlign: 'center', padding: compact ? '2px 0' : '24px 0' }}>
+      <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: C.muted, marginBottom: 4 }}>Predicted Value</div>
+      <div style={{ fontSize: compact ? 30 : 48, fontWeight: 900, color: C.primary }}>{p.value}</div>
     </div>
   )
 
   if (p.type === 'cluster') return (
-    <div style={{ textAlign: 'center', padding: '24px 0' }}>
-      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.5, color: C.muted, marginBottom: 8 }}>Assigned Cluster</div>
-      <div style={{ fontSize: 48, fontWeight: 900, color: '#8b5cf6' }}>#{p.label}</div>
+    <div style={{ textAlign: 'center', padding: compact ? '2px 0' : '24px 0' }}>
+      <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: C.muted, marginBottom: 4 }}>Assigned Cluster</div>
+      <div style={{ fontSize: compact ? 30 : 48, fontWeight: 900, color: '#8b5cf6' }}>#{p.label}</div>
     </div>
   )
 
@@ -311,11 +383,13 @@ const PredictionDisplay = ({ prediction, batchData }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1 — Single Entry Controls
 // ─────────────────────────────────────────────────────────────────────────────
-const SingleEntrySection = ({ features, values, onChange, predicting }) => {
+const SingleEntrySection = ({ features, values, onChange, predicting, fillHeight }) => {
   const { C } = useTheme()
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <div style={{ maxHeight: 460, overflowY: 'auto', paddingRight: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: fillHeight ? 1 : undefined, minHeight: 0 }}>
+      <div style={fillHeight
+        ? { flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }
+        : { maxHeight: 460, overflowY: 'auto', paddingRight: 4 }}>
         {features.map(feat => {
           const val = values[feat.name] ?? feat.default
           return (
@@ -418,41 +492,33 @@ const BatchUploadSection = ({ onFile, uploading, batchData }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // INFO CONTENT
 // ─────────────────────────────────────────────────────────────────────────────
-const INFO_SIMULATOR = `What-If Simulator
+const INFO_SIMULATOR = {
+  itemsTitle: 'What-If Simulator',
+  footer: 'The SHAP waterfall below shows WHY the model made its decision for the exact values you set — not just what it predicted, but which features pushed the outcome in each direction.',
+  items: [
+    { label: 'How It Works', desc: 'Each slider or dropdown represents one feature your model was trained on. As you adjust values, the model makes a new prediction in near-real-time.' },
+    { label: 'What-If Questions', desc: '"What if this patient\'s glucose level was 180 instead of 90?"\n"How does the prediction change if study hours drop from 6 to 2?"\n"Is the model sensitive to age, or is GPA more decisive?"' },
+  ],
+}
 
-Each slider or dropdown represents one feature your model was trained on. As you adjust values, the model makes a new prediction in near-real-time.
+const INFO_BATCH = {
+  itemsTitle: 'Batch Prediction',
+  items: [
+    { label: 'How It Works', desc: 'Upload a CSV file with feature columns but NO target column. The model predicts the outcome for every row and returns your file with a new "Predicted" column appended.' },
+    { label: 'Requirements', desc: 'The CSV must contain at least the feature columns the model was trained on.\nThe target column should be absent (it\'s ignored if present).\nColumn names must match exactly (case-sensitive).' },
+    { label: 'After Prediction', desc: 'A "Predicted" column and (for classification) a "Confidence" column are added. Download the result as a new CSV.' },
+  ],
+}
 
-Use this to ask "What-If" questions:
-• "What if this patient's glucose level was 180 instead of 90?"
-• "How does the prediction change if study hours drop from 6 to 2?"
-• "Is the model sensitive to age, or is GPA more decisive?"
-
-The SHAP waterfall below shows WHY the model made its decision for the exact values you set — not just what it predicted, but which features pushed the outcome in each direction.`
-
-const INFO_BATCH = `Batch Prediction
-
-Upload a CSV file with feature columns but NO target column. The model predicts the outcome for every row and returns your file with a new "Predicted" column appended.
-
-Requirements:
-• The CSV must contain at least the feature columns the model was trained on
-• The target column should be absent (it's ignored if present)
-• Column names must match exactly (case-sensitive)
-
-After prediction: a "Predicted" column and (for classification) a "Confidence" column are added. Download the result as a new CSV.`
-
-const INFO_WATERFALL = `SHAP Waterfall Chart — Why did the model predict this?
-
-The waterfall chart explains one specific prediction by showing how each feature contributed to moving the model's output from its baseline to the final result.
-
-Reading the chart:
-• f(x) at the top = the actual prediction for this input
-• E[f(x)] at the bottom = the model's average prediction across the training data
-• Each bar shows how much one feature shifted the prediction:
-  – Red bar = pushed the prediction HIGHER (toward the positive class)
-  – Blue bar = pushed the prediction LOWER (toward the negative class)
-• Bars are sorted by absolute impact — the most influential feature is at the top.
-
-Example: "Glucose: +0.34" means this glucose value increased the predicted probability by 0.34 compared to the baseline.`
+const INFO_WATERFALL = {
+  itemsTitle: 'SHAP Waterfall Chart — Why Did The Model Predict This?',
+  footer: 'Example: "Glucose: +0.34" means this glucose value increased the predicted probability by 0.34 compared to the baseline.',
+  items: [
+    { label: 'What It Explains', desc: 'The waterfall chart explains one specific prediction by showing how each feature contributed to moving the model\'s output from its baseline to the final result.' },
+    { label: 'f(x) and E[f(x)]', desc: 'f(x) at the top = the actual prediction for this input.\nE[f(x)] at the bottom = the model\'s average prediction across the training data.' },
+    { label: 'Reading a Bar', desc: 'Red bar = pushed the prediction HIGHER (toward the positive class).\nBlue bar = pushed the prediction LOWER (toward the negative class).\nBars are sorted by absolute impact — the most influential feature is at the top.' },
+  ],
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
@@ -492,27 +558,41 @@ export default function SimulatorPage({
       .finally(() => setLoading(false))
   }, [filePath, modelPklPath])
 
+  // Each slider tick fires a new debounced predict-single call, but nothing
+  // guaranteed the responses came back in the order they were sent - a
+  // request for an earlier slider position that happens to take longer
+  // (e.g. a heavier model/dataset pushing SHAP's KernelExplainer past a
+  // faster later request) could resolve last and silently overwrite a
+  // fresher prediction with a stale one, making the result panel look
+  // "stuck" while nothing was visibly wrong with the request/response
+  // wiring itself. requestIdRef makes only the most-recently-issued call's
+  // response actually get applied to state.
+  const requestIdRef = useRef(0)
+
   const debouncedPredict = useMemo(() => debounce(async vals => {
     if (!filePath || !modelPklPath) return
+    const myRequestId = ++requestIdRef.current
     setPredicting(true)
     try {
       const res = await callSim('predict-single', {
         file_path: filePath, target_column: projectData?.targetColumn || '', model_pkl_path: modelPklPath,
         task_type: projectData?.taskType || 'classification', feature_values: vals,
       })
+      if (myRequestId !== requestIdRef.current) return // superseded by a newer request
       setPrediction(res.prediction)
       setShapData(res.shap)
     } catch (e) { setError(e.message) }
-    finally { setPredicting(false) }
+    finally { if (myRequestId === requestIdRef.current) setPredicting(false) }
   }, 300), [filePath, modelPklPath, projectData?.targetColumn, projectData?.taskType])
 
   const handleValueChange = useCallback((name, val) => {
-    setValues(prev => {
-      const next = { ...prev, [name]: val }
-      debouncedPredict(next)
-      return next
-    })
-  }, [debouncedPredict])
+    setValues(prev => ({ ...prev, [name]: val }))
+  }, [])
+
+  useEffect(() => {
+    if (Object.keys(values).length > 0 && mode === 'single') debouncedPredict(values)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values])
 
   useEffect(() => {
     if (Object.keys(values).length > 0 && mode === 'single') debouncedPredict(values)
@@ -534,7 +614,7 @@ export default function SimulatorPage({
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'simulator'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'simulator'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <VersionsBar versions={versions} />
       <div style={{ padding: '4px 32px 0', fontSize: 11, color: C.muted }}>
         📌 Analysis only — no new dataset version is created on this page. It reads the model trained on
@@ -607,30 +687,36 @@ export default function SimulatorPage({
                 {m.label}
               </button>
             ))}
-            <InfoIcon content={mode === 'single' ? INFO_SIMULATOR : INFO_BATCH} width={320} />
+            <InfoIcon {...(mode === 'single' ? INFO_SIMULATOR : INFO_BATCH)} width={320} />
           </div>
 
-          {/* ── Main Two-Column Layout ── */}
+          {/* ── Main Two-Column Layout ──
+              LEFT stretches to match the RIGHT column's total height (grid's
+              default align-items:stretch) so "Settings for One Entry" always
+              reaches the page bottom. RIGHT is a flex column where the
+              Prediction card sizes to its own content (secondary, de-emphasized)
+              and the SHAP card absorbs all the height that frees up. */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
 
             {/* ── LEFT PANEL ── */}
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               {mode === 'single' ? (
-                <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2, border: `1px solid ${C.border}` }}>
+                <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2,
+                  border: `1px solid ${C.border}`, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>Settings for One Entry</div>
-                    <InfoIcon content={INFO_SIMULATOR} width={300} />
+                    <InfoIcon {...INFO_SIMULATOR} width={300} />
                   </div>
                   <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
                     Adjust sliders and dropdowns — prediction updates automatically after 300ms.
                   </div>
-                  <SingleEntrySection features={features} values={values} onChange={handleValueChange} predicting={predicting} />
+                  <SingleEntrySection features={features} values={values} onChange={handleValueChange} predicting={predicting} fillHeight />
                 </div>
               ) : (
-                <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2, border: `1px solid ${C.border}` }}>
+                <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2, border: `1px solid ${C.border}`, flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>Batch CSV Upload</div>
-                    <InfoIcon content={INFO_BATCH} width={300} />
+                    <InfoIcon {...INFO_BATCH} width={300} />
                   </div>
                   <div style={{ fontSize: 11, color: C.muted, marginBottom: 14 }}>
                     Upload a CSV without the target column. All rows are predicted simultaneously.
@@ -642,21 +728,22 @@ export default function SimulatorPage({
 
             {/* ── RIGHT PANEL ── */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
-              <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2,
-                border: `1px solid ${C.border}`, borderTop: `3px solid ${C.primary}` }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 12 }}>
+              <div style={{ background: C.card, borderRadius: cardR, padding: '12px 18px', boxShadow: shadow2,
+                border: `1px solid ${C.border}`, borderTop: `3px solid ${C.primary}`, flex: '0 0 auto' }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: C.text, marginBottom: 8 }}>
                   {mode === 'batch' ? '📊 Batch Prediction Results' : '🔮 Prediction'}
                   {predicting && <span style={{ color: C.primary, fontSize: 11, fontWeight: 400, marginLeft: 8 }}>⏳ updating…</span>}
                 </div>
                 <PredictionDisplay
                   prediction={mode === 'single' ? prediction : batchData?.first_pred?.prediction}
-                  batchData={mode === 'batch' ? batchData : null} />
+                  batchData={mode === 'batch' ? batchData : null} compact />
               </div>
 
-              <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2, border: `1px solid ${C.border}` }}>
+              <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2, border: `1px solid ${C.border}`,
+                flex: '1 1 auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>SHAP Waterfall — Why this prediction?</div>
-                  <InfoIcon content={INFO_WATERFALL} width={340} />
+                  <InfoIcon {...INFO_WATERFALL} width={340} />
                 </div>
                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
                   Each bar shows how one feature pushed the prediction above or below the model's average.

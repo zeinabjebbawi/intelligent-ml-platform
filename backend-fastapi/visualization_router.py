@@ -136,8 +136,9 @@ def class_distribution(df: pd.DataFrame, target: str) -> List[dict]:
         return []
 
 def compute_fingerprint(df: pd.DataFrame, target: Optional[str],
-                         balance_result: Optional[dict], ft_corr: list) -> dict:
-    """Compute 6 quality scores (0-100) for the Summary radar.
+                         balance_result: Optional[dict], ft_corr: list,
+                         is_clustering: bool = False) -> dict:
+    """Compute quality scores (0-100) for the Summary radar.
 
     Balance now comes from the shared check_target_balance() utility (see
     utils/balance_checker.py) instead of a hand-rolled min/max percentage
@@ -147,12 +148,20 @@ def compute_fingerprint(df: pd.DataFrame, target: Optional[str],
     story at all for a regression target. balance_result is whatever
     check_target_balance(df[target]) returned at the call site — None only
     when there's no target column at all.
+
+    Balance has no meaning for clustering (no target/classes to be evenly
+    distributed) - `is_clustering` (the task type explicitly picked on
+    Upload, not inferred from `target` being absent) makes `balance` None
+    instead of the old meaningless 50.0 placeholder, and drops it from the
+    axes averaged into `overall` entirely, rather than letting a filler
+    number quietly drag the score toward the middle for every clustering
+    dataset.
     """
     total_cells = df.shape[0] * df.shape[1]
     missing_cells = int(df.isnull().sum().sum())
     completeness = round((1 - missing_cells / max(total_cells, 1)) * 100, 1)
 
-    balance = balance_score(balance_result) if balance_result else 50.0
+    balance = None if is_clustering else (balance_score(balance_result) if balance_result else 50.0)
 
     # Normality: % of numeric columns with |skew| < 1
     num_cols = df.select_dtypes(include=[np.number]).columns
@@ -190,10 +199,12 @@ def compute_fingerprint(df: pd.DataFrame, target: Optional[str],
 
     # signal_strength is still computed and returned below (harmless to
     # keep around) but deliberately excluded from `overall` — the radar's
-    # visible axes are now Completeness/Balance/Normality/Separability/
-    # Cleanliness (5), and "overall" should be the average of exactly what
-    # the radar shows, not a 6th hidden number nobody sees contributing to it.
-    scores = [completeness, balance, normality, separability, cleanliness]
+    # visible axes are Completeness/Balance/Normality/Separability/
+    # Cleanliness (5, or 4 for clustering with Balance dropped), and
+    # "overall" should be the average of exactly what the radar shows, not
+    # a 6th hidden number nobody sees contributing to it.
+    scores = [completeness, normality, separability, cleanliness] if is_clustering \
+        else [completeness, balance, normality, separability, cleanliness]
     positive = [s for s in scores if s > 0]
     overall = round(sum(positive) / max(len(positive), 1), 1)
 
@@ -215,10 +226,14 @@ def build_signal_assessment(df, target, ft_corr, fingerprint, skewed):
     elif fingerprint["completeness"] >= 95:
         strengths.append(f"Dataset is {fingerprint['completeness']}% complete — minor missingness remaining.")
 
-    if fingerprint["balance"] >= 70:
-        strengths.append("Target classes are well-balanced — models will train fairly on all classes.")
-    elif fingerprint["balance"] < 40:
-        warnings.append(f"Target balance score is {fingerprint['balance']}/100. Class imbalance may bias model predictions.")
+    # None for clustering (see compute_fingerprint) - there's no target to
+    # have a balance verdict about, so skip this check entirely rather than
+    # comparing None >= 70 (a real TypeError this would otherwise crash on).
+    if fingerprint["balance"] is not None:
+        if fingerprint["balance"] >= 70:
+            strengths.append("Target classes are well-balanced — models will train fairly on all classes.")
+        elif fingerprint["balance"] < 40:
+            warnings.append(f"Target balance score is {fingerprint['balance']}/100. Class imbalance may bias model predictions.")
 
     if ft_corr:
         top = ft_corr[0]
@@ -683,7 +698,8 @@ def analyze(req: AnalyzeReq):
                 df[target], task_type="classification" if target_is_classification else "regression")
         is_balanced = bool(target_quality) and target_quality["level"] in ("balanced", "mild")
 
-        fingerprint = compute_fingerprint(df, target, target_quality, ft_corr)
+        fingerprint = compute_fingerprint(df, target, target_quality, ft_corr,
+                                           is_clustering=(req.task_type == "clustering"))
         signal = build_signal_assessment(df, target, ft_corr, fingerprint, skewed_curr)
 
         n_skewed = sum(1 for s in skewed_curr if s["severe"])

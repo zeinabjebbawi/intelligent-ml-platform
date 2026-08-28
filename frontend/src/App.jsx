@@ -273,6 +273,35 @@ function App() {
   // rest of the app still works via the manual LoadDatasetForm fallback.
   const handleUploadMeta = ({ rawFile, ...meta }) => {
     setUploadMeta(meta); // DiagnosePage only needs the parsed fields, not the raw File
+    // A genuinely NEW dataset (rawFile present, i.e. the user actually
+    // picked/uploaded a file here, not some other unrelated onUpdateData
+    // call) must restart the whole journey - every page after Upload was
+    // staying unlocked (furthestOrder only ever increases via advance())
+    // and Training kept showing the PREVIOUS dataset's model history, even
+    // though none of that downstream state has anything to do with the
+    // new file yet. Reset unconditionally on rawFile alone (not gated on
+    // projectId/Django succeeding below) since none of this is Django state.
+    if (rawFile) {
+      setFurthestOrder(STEP_ORDER.upload);
+      setLastModelPath(null);
+      setReportContext({});
+      // Explicit wipe of TrainTest.jsx's own persisted state
+      // (prism_training_*), NOT relying on its filePath-based key scoping
+      // alone - Django's upload endpoint always writes to the SAME path
+      // (media/datasets/user_<id>/project_<id>/original.csv, overwritten
+      // in place - see backend-django/datasets/views.py's
+      // DatasetUploadView), so a re-upload does not reliably change
+      // filePath at all, meaning that scoping alone silently failed to
+      // isolate a new dataset from an old one's training history.
+      // Confirmed live: uploading a second dataset still showed the first
+      // dataset's trained models on reaching Training. This blunt removal
+      // is correct regardless of whether filePath happens to differ.
+      try {
+        Object.keys(localStorage)
+          .filter(k => k.startsWith('prism_training_'))
+          .forEach(k => localStorage.removeItem(k));
+      } catch {}
+    }
     if (rawFile && projectId) {
       (async () => {
         try {
@@ -448,7 +477,7 @@ function App() {
     return (
       <div>
         <FeatureSelectionPage
-          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
+          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
           onNext={(next) => advance('training')}
           onUpdateData={(update) => {
             if (update.cleanedFilePath) setFilePath(update.cleanedFilePath);
@@ -501,7 +530,7 @@ function App() {
       <FeatureImportancePage
         projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
         modelPklPath={lastModelPath}
-        onNext={() => advance('learning_curve')}
+        onNext={() => advance(uploadMeta?.taskType === 'clustering' ? 'simulator' : 'learning_curve')}
         onGoTo={handleNavigate}
         getDisplayPath={versionHistory.getDisplayPath}
         versions={versionHistory.versions}

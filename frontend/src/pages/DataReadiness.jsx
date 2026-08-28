@@ -4,7 +4,8 @@
  * Sections (in order, all scrollable):
  *   A. Pipeline Journey  +  KPI strip
  *   B. Summary (signature radar chart — 5 axes: Completeness, Balance,
- *      Normality, Separability, Cleanliness)
+ *      Normality, Separability, Cleanliness; Balance is dropped for
+ *      clustering datasets, which have no target to be balanced)
  *   C. Before vs After  (skewness moved out to Quality — see below;
  *      missing values, class balance)
  *   D. Distribution Health (mini histogram grid + class-conditional overlays)
@@ -167,15 +168,19 @@ const ChartCard = ({ title, sub, children, action, style: extraStyle }) => {
 // feature-selection concern (it's still shown, correctly, in Feature
 // Selection's own correlation ranking), not a general readiness axis.
 // ─────────────────────────────────────────────────────────────────────────────
-const DataFingerprint = ({ scores }) => {
+const DataFingerprint = ({ scores, isClustering }) => {
   const { C } = useTheme()
-  const AXES = [
+  const ALL_AXES = [
     { key: 'completeness', label: 'Completeness' },
     { key: 'balance',      label: 'Balance' },
     { key: 'normality',    label: 'Normality' },
     { key: 'separability', label: 'Separability' },
     { key: 'cleanliness',  label: 'Cleanliness' },
   ]
+  // Balance measures how evenly TARGET CLASSES are distributed - clustering
+  // has no target at all, so the axis (and its scale/shape) is dropped
+  // entirely rather than shown with a meaningless filler score.
+  const AXES = isClustering ? ALL_AXES.filter(a => a.key !== 'balance') : ALL_AXES
   const N = AXES.length
   const CX = 180, CY = 180, R = 130
   const angles = AXES.map((_, i) => (i * 2 * Math.PI / N) - Math.PI / 2)
@@ -247,11 +252,11 @@ const DataFingerprint = ({ scores }) => {
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
           Each axis measures one dimension of data readiness.
-          A large, regular pentagon = excellent ML-ready dataset.
+          A large, regular {isClustering ? 'shape' : 'pentagon'} = excellent ML-ready dataset.
         </div>
         {[
           ['Completeness', 'Fraction of non-null values across all columns'],
-          ['Balance',      'How evenly the target classes are distributed'],
+          ...(isClustering ? [] : [['Balance', 'How evenly the target classes are distributed']]),
           ['Normality',    '% of features with |skewness| < 1'],
           ['Separability', 'Class separation score (from PCA — load below)'],
           ['Cleanliness',  '% of rows free from IQR-detected outliers'],
@@ -658,6 +663,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   // what lets this fallback chain correctly find "sampling" (or whichever
   // upstream step actually ran) without hardcoding a specific step name.
   const filePath = getDisplayPath ? getDisplayPath('data_readiness') : projectData?.filePath
+  const isClustering = projectData?.taskType === 'clustering'
 
   // The true original upload — for every "before vs after" comparison —
   // read directly from the version array rather than requiring a caller to
@@ -715,13 +721,15 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
       if (result.silhouette > 0 && data) {
         setData(prev => {
           const nextFp = { ...prev.fingerprint, separability: result.silhouette }
-          // 5 axes now (signal_strength deliberately excluded — see the
-          // backend's compute_fingerprint for why), matching the radar.
-          // Mirrors the backend's own averaging rule exactly (positive
-          // scores only) so `overall` doesn't jump inconsistently the
-          // moment this client-side recompute takes over from the
-          // server's initial value.
-          const AXIS_KEYS = ['completeness', 'balance', 'normality', 'separability', 'cleanliness']
+          // 5 axes (4 for clustering — Balance dropped, see the backend's
+          // compute_fingerprint for why; signal_strength deliberately
+          // excluded), matching the radar. Mirrors the backend's own
+          // averaging rule exactly (positive scores only) so `overall`
+          // doesn't jump inconsistently the moment this client-side
+          // recompute takes over from the server's initial value.
+          const AXIS_KEYS = isClustering
+            ? ['completeness', 'normality', 'separability', 'cleanliness']
+            : ['completeness', 'balance', 'normality', 'separability', 'cleanliness']
           const vals = AXIS_KEYS.map(k => nextFp[k] || 0)
           const positive = vals.filter(v => v > 0)
           nextFp.overall = Math.round(positive.reduce((s,v) => s+v, 0) / Math.max(positive.length, 1))
@@ -746,7 +754,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
 
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'data_readiness'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'data_readiness'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ textAlign: 'center', padding: '80px 0', color: C.muted }}>
         <div style={{ fontSize: 28, marginBottom: 12, display: 'inline-block',
           animation: 'spin 1s linear infinite' }}>⚙</div>
@@ -757,7 +765,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   )
   if (error) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'data_readiness'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'data_readiness'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`,
         borderRadius: 12, padding: 20, color: C.danger, margin: 32 }}>⚠ {error}</div>
     </div>
@@ -782,7 +790,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', paddingBottom: 60 }}>
-      <TopNav active={active || 'data_readiness'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'data_readiness'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <VersionsBar versions={versions} />
 
       {/* ── Page header — no Continue button here anymore, see file header
@@ -803,7 +811,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
       {/* ── KPI Strip ─────────────────────────────────────────────────────── */}
       <div style={{ padding: '20px 32px 0' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 20 }}>
-          <MetricCard icon="▤" label="Rows (cleaned)" value={current.row_count.toLocaleString()}
+          <MetricCard icon="▤" label="Rows" value={current.row_count.toLocaleString()}
             accent={C.primary}
             trend={original?.row_count ? (current.row_count < original.row_count ? 'negative' : 'neutral') : null}
             trendLabel={original?.row_count ? `was ${original.row_count.toLocaleString()}` : ''}
@@ -844,9 +852,9 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
         {/* ── A. Summary ───────────────────────────────────────────────────── */}
         <Section id="summary" icon="◆" accent={C.primary}
           label="Summary"
-          sub="Your dataset quality across 5 ML-readiness dimensions">
+          sub={`Your dataset quality across ${isClustering ? 4 : 5} ML-readiness dimensions`}>
           <ChartCard style={{ padding: '28px 32px' }}>
-            <DataFingerprint scores={fingerprint || {}} />
+            <DataFingerprint scores={fingerprint || {}} isClustering={isClustering} />
           </ChartCard>
         </Section>
 

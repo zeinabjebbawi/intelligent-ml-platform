@@ -41,8 +41,13 @@ export const NAV_LINKS = [
   { key: 'report', label: 'Report', enabled: true, order: STEP_ORDER.report },
 ]
 
-export default function TopNav({ active, onNavigate, furthestOrder = Infinity }) {
+export default function TopNav({ active, onNavigate, furthestOrder = Infinity, taskType }) {
   const { C, dark, toggleTheme } = useTheme()
+  // Learning Curve re-runs a trained model across increasing training-set
+  // sizes - meaningless for K-Means (no train/test split, no accuracy
+  // curve to plot), so it's fully removed from the link list for a
+  // clustering project rather than just grayed out.
+  const links = taskType === 'clustering' ? NAV_LINKS.filter(l => l.key !== 'learning_curve') : NAV_LINKS
 
   return (
     <div style={{
@@ -66,7 +71,7 @@ export default function TopNav({ active, onNavigate, furthestOrder = Infinity })
             its natural one-line width always; the row scrolls horizontally
             instead of wrapping if it ever runs out of room. */}
         <div style={{ display: 'flex', gap: 22, overflowX: 'auto', flexWrap: 'nowrap' }}>
-          {NAV_LINKS.map(l => {
+          {links.map(l => {
             const isActive = l.key === active
             const reached = l.order <= furthestOrder
             const clickable = l.enabled && reached && !!onNavigate && !isActive

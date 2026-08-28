@@ -245,6 +245,130 @@ def compute_shap(model, X: pd.DataFrame, model_name: str, task_type: str,
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MODEL-AWARE RIGHT PANEL — non-tree models have no split-based importance,
+# so instead of a disabled Weight/Coverage tab + "Gain" standing in for
+# coefficient magnitude, the right panel shows one dedicated chart per model
+# family. TREE_MODELS (decision_tree/random_forest/random_forest_regressor/
+# xgboost) are completely untouched — they keep the weight/gain/coverage
+# computation below exactly as it already was.
+# ─────────────────────────────────────────────────────────────────────────────
+
+LINEAR_MODELS  = {"logistic_regression", "linear_regression", "ridge_regression"}
+CLUSTER_MODELS = {"kmeans"}
+
+def get_model_group(model_name: str, model=None) -> str:
+    """tree | linear | perm | cluster — which right-panel chart to show.
+    svm is special-cased: build_model() (training_router.py) only gives SVC
+    a real .coef_ when kernel='linear' (sklearn's own restriction, not this
+    app's) — a linear-kernel SVM is treated like the other linear models,
+    every other kernel falls back to permutation importance, same as
+    KNN/Naive Bayes."""
+    if model_name in TREE_MODELS:
+        return "tree"
+    if model_name in LINEAR_MODELS:
+        return "linear"
+    if model_name in CLUSTER_MODELS:
+        return "cluster"
+    if model_name == "svm":
+        kernel = getattr(unwrap_model(model), "kernel", None) if model is not None else None
+        return "linear" if kernel == "linear" else "perm"
+    return "perm"  # knn, naive_bayes, and any unrecognized model name
+
+def get_linear_coefficients(model, feature_names: List[str]) -> List[Dict]:
+    """Signed, ranked coefficients for logistic/linear/ridge regression and
+    linear-kernel SVM. build_model() wraps every one of these in
+    Pipeline("scaler" -> "model"), so the coefficients read off the
+    unwrapped inner estimator are ALREADY standardized — each one already
+    means "effect of a 1-standard-deviation change in that feature". No
+    manual coef * feature_std multiplication is needed here, and doing it
+    anyway would double-standardize and understate every coefficient."""
+    inner = unwrap_model(model)
+    if not hasattr(inner, "coef_"):
+        return [{"error": "This model has no coefficients to show."}]
+    coef = inner.coef_
+    # Binary classification / binary SVM boundary: (1, n_features). Multiclass
+    # (or one-vs-one SVM, one row per class pair): same first-row
+    # simplification get_importance_gain() above already uses for coef_.
+    if np.ndim(coef) > 1:
+        coef = coef[0]
+    result = []
+    for i, feat in enumerate(feature_names):
+        v = safe_round(float(coef[i])) or 0.0
+        result.append({"feature": feat, "value": v, "abs_value": abs(v),
+                        "direction": "positive" if v >= 0 else "negative"})
+    result.sort(key=lambda x: x["abs_value"], reverse=True)
+    for i, r in enumerate(result):
+        r["rank"] = i + 1
+    return result
+
+def compute_permutation_importance(model, X: pd.DataFrame, y: pd.Series,
+                                   task_type: str, feature_names: List[str],
+                                   max_rows: int = 300) -> List[Dict]:
+    """Shuffle each feature, measure the score drop — the standard
+    model-agnostic fallback for KNN, Naive Bayes, and non-linear-kernel SVM
+    (none of which expose coefficients or a split-based importance concept).
+    Capped to max_rows for the same reason compute_shap() caps
+    KernelExplainer's input: n_repeats re-scoring passes over the model's
+    full predict cost would make this endpoint slow on a large dataset.
+    n_jobs is left at sklearn's sequential default (not -1) — joblib's
+    process-based parallelism can leave orphaned worker processes behind on
+    Windows, and the row/feature caps here already keep sequential execution
+    fast enough that parallelizing isn't worth that risk."""
+    from sklearn.inspection import permutation_importance
+    try:
+        if len(X) > max_rows:
+            idx = np.random.default_rng(42).choice(len(X), max_rows, replace=False)
+            X_s, y_s = X.iloc[list(idx)], y.iloc[list(idx)]
+        else:
+            X_s, y_s = X, y
+        scoring = "r2" if task_type == "regression" else "accuracy"
+        result = permutation_importance(model, X_s, y_s, n_repeats=5,
+                                        scoring=scoring, random_state=42)
+        out = []
+        for i, feat in enumerate(feature_names):
+            v = safe_round(float(result.importances_mean[i])) or 0.0
+            out.append({"feature": feat, "value": v, "abs_value": abs(v),
+                        "std": safe_round(float(result.importances_std[i])) or 0.0})
+        out.sort(key=lambda x: x["abs_value"], reverse=True)
+        for i, r in enumerate(out):
+            r["rank"] = i + 1
+        return out
+    except Exception as e:
+        return [{"error": str(e)}]
+
+def compute_cluster_f_stat(model, X: pd.DataFrame, feature_names: List[str]) -> List[Dict]:
+    """ANOVA F-statistic per feature: variance BETWEEN K-Means cluster means
+    vs. variance WITHIN each cluster. K-Means has no target and no
+    coefficients, so this is the closest analogue to "importance" here — a
+    feature the clustering leaned on heavily will differ sharply across
+    cluster centers relative to its own spread inside each cluster."""
+    from scipy.stats import f_oneway
+    try:
+        labels = np.asarray(model.predict(X))
+        clusters = sorted(set(labels.tolist()))
+        if len(clusters) < 2:
+            return [{"error": "K-Means found fewer than 2 clusters on this data — cluster separation can't be computed."}]
+        out = []
+        for feat in feature_names:
+            groups = [X.loc[labels == c, feat].dropna().values for c in clusters]
+            groups = [g for g in groups if len(g) > 1]
+            if len(groups) < 2:
+                out.append({"feature": feat, "value": 0.0, "abs_value": 0.0, "p_value": None})
+                continue
+            f_stat, p_val = f_oneway(*groups)
+            v = safe_round(float(f_stat)) or 0.0
+            out.append({"feature": feat, "value": v, "abs_value": v, "p_value": safe_round(float(p_val), 6)})
+        total = sum(r["abs_value"] for r in out) or 1
+        for r in out:
+            r["pct"] = safe_round(r["abs_value"] / total * 100, 2) or 0.0
+        out.sort(key=lambda x: x["abs_value"], reverse=True)
+        for i, r in enumerate(out):
+            r["rank"] = i + 1
+        return out
+    except Exception as e:
+        return [{"error": str(e)}]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # REQUEST MODEL
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -288,6 +412,23 @@ def compute_feature_impact(req: ComputeReq):
         gain     = to_ranked_list(get_importance_gain(model, feature_names))
         coverage = to_ranked_list(get_importance_coverage(model, feature_names))
         supports_wgc = mname in TREE_MODELS
+
+        # ── Model-aware right panel (non-tree models) ───────────────────────
+        model_group = get_model_group(mname, model)
+        right_panel: Dict = {}
+        if model_group == "linear":
+            right_panel["coefficients"] = get_linear_coefficients(model, feature_names)
+        elif model_group == "perm":
+            y_perm = df[req.target_column] if req.target_column in df.columns else None
+            if y_perm is None:
+                right_panel["perm_data"] = [{"error": "A target column is required to compute permutation importance for this model."}]
+            else:
+                if task_type != "regression" and not pd.api.types.is_numeric_dtype(y_perm):
+                    from sklearn.preprocessing import LabelEncoder
+                    y_perm = pd.Series(LabelEncoder().fit_transform(y_perm.astype(str)), index=y_perm.index)
+                right_panel["perm_data"] = compute_permutation_importance(model, X, y_perm, task_type, feature_names)
+        elif model_group == "cluster":
+            right_panel["f_stat_data"] = compute_cluster_f_stat(model, X, feature_names)
 
         # ── SHAP ─────────────────────────────────────────────────────────────
         shap_result = compute_shap(model, X, mname, task_type)
@@ -339,17 +480,58 @@ def compute_feature_impact(req: ComputeReq):
             f"every decision."
         ) if top_cov != "—" else "Coverage requires a tree-based model — see the note above the chart."
 
+        if model_group == "linear":
+            coefs = right_panel.get("coefficients", [])
+            if coefs and "error" not in coefs[0]:
+                top = coefs[0]
+                right_panel_conclusion = (
+                    f"'{top['feature']}' has the strongest standardized effect on the prediction "
+                    f"({top['value']:+.4f}). Since every feature was scaled before fitting, a "
+                    f"1-standard-deviation increase in '{top['feature']}' "
+                    f"{'raises' if top['direction'] == 'positive' else 'lowers'} the model's output by "
+                    f"that amount, holding the other features constant."
+                )
+            else:
+                right_panel_conclusion = coefs[0]["error"] if coefs else "Coefficients could not be computed for this model."
+        elif model_group == "perm":
+            perm = right_panel.get("perm_data", [])
+            if perm and "error" not in perm[0]:
+                top = perm[0]
+                right_panel_conclusion = (
+                    f"'{top['feature']}' caused the largest score drop when its values were shuffled "
+                    f"({top['value']:+.4f}). The model depends on this feature more than any other to "
+                    f"make correct predictions."
+                )
+            else:
+                right_panel_conclusion = perm[0]["error"] if perm else "Permutation importance could not be computed for this model."
+        elif model_group == "cluster":
+            fstat = right_panel.get("f_stat_data", [])
+            if fstat and "error" not in fstat[0]:
+                top = fstat[0]
+                right_panel_conclusion = (
+                    f"'{top['feature']}' separates the clusters most strongly (F = {top['value']:.2f}). "
+                    f"Its values vary far more BETWEEN clusters than WITHIN any single cluster — the "
+                    f"clearest sign a feature actually drove how K-Means grouped the data."
+                )
+            else:
+                right_panel_conclusion = fstat[0]["error"] if fstat else "Cluster separation could not be computed for this model."
+        else:
+            right_panel_conclusion = None
+
         return {
             "model_name":         mname,
             "task_type":          task_type,
             "feature_names":      feature_names,
             "supports_wgc":       supports_wgc,
+            "model_group":        model_group,
             "feature_importance": {"weight": weight, "gain": gain, "coverage": coverage},
+            "right_panel":        right_panel,
             "shap":               shap_result,
             "suggestions":        suggestions,
             "descriptions": {
                 "shap": shap_conclusion, "gain": gain_conclusion,
                 "weight": weight_conclusion, "coverage": coverage_conclusion,
+                "right_panel": right_panel_conclusion,
             },
         }
     except HTTPException:

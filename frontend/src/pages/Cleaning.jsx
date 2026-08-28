@@ -393,7 +393,7 @@ function ExpandableChart({ title, subtitle, children, minHeight = 260 }) {
   const { C } = useTheme()
   const [expanded, setExpanded] = useState(false)
   return (
-    <div style={{ position: 'relative', background: C.white, border: `1px solid ${C.border}`,
+    <div style={{ position: 'relative', minWidth: 0, background: C.white, border: `1px solid ${C.border}`,
       borderRadius: 14, padding: '16px 20px 20px', boxShadow: shadow2 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div>

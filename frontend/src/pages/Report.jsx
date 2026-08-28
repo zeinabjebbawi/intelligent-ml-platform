@@ -341,7 +341,7 @@ export default function ReportPage({
 
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'report'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'report'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ textAlign: 'center', padding: '80px 0', color: C.muted }}>
         <div style={{ fontSize: 28, display: 'inline-block', animation: 'rpt-spin 1s linear infinite', marginBottom: 12 }}>◐</div>
         <p>Generating final project report…</p>
@@ -362,7 +362,7 @@ export default function ReportPage({
       `}</style>
 
       <div className="no-print">
-        <TopNav active={active || 'report'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+        <TopNav active={active || 'report'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       </div>
 
       {/* Deliberately the one distinct-colored header on the platform —

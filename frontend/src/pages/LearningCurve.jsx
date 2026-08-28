@@ -14,7 +14,7 @@
  * draft of this page invented its own indigo palette from scratch — not
  * used, see memory: theme system discipline).
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import {
   ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ReferenceLine, Brush, ResponsiveContainer,
@@ -49,29 +49,97 @@ const hexToRgba = (hex, alpha) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // INFO ICON — same click-to-open ⓘ popover pattern as TrainTest.jsx / FeatureImportance.jsx.
 // ─────────────────────────────────────────────────────────────────────────────
-const InfoIcon = ({ content, width = 320 }) => {
+// Two content modes (same convention as TrainTest.jsx's InfoIcon):
+// `content` (plain pre-line string) for a short paragraph or two, or
+// `items` (array of {label, desc}, plus optional `itemsTitle`/`footer`)
+// for a wider, bold-labeled multi-column popover — used for every
+// explanation on this page now, since a single undifferentiated paragraph
+// reads as one flat wall of text no matter how it's organized internally.
+const InfoIcon = ({ content, items, itemsTitle, footer, width = 320 }) => {
   const { C } = useTheme()
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const popupRef = useRef(null)
+  const isWide = !!items
+  const popupW = isWide ? 560 : width
+
+  // Clamping `left` against a known fixed width is easy, but clamping `top`
+  // needs the popup's actual rendered HEIGHT (content-driven, unknown until
+  // it renders) - this measures the just-mounted popup via popupRef and
+  // corrects `top` before the browser paints (useLayoutEffect runs
+  // synchronously pre-paint, so there's no visible flicker), instead of
+  // letting a tall popup clip past the viewport bottom or forcing internal
+  // scroll. Old version was `position:'absolute', left:22, top:-6` with no
+  // clamping at all, which clipped/forced a page-level horizontal scrollbar
+  // whenever the icon sat near a panel's right edge.
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    // Measure the popup's REAL rendered box, not the declared width -
+    // these divs use default content-box sizing, so padding/border add on
+    // top of it. offsetWidth/offsetHeight report the true box.
+    const w = popupRef.current?.offsetWidth || popupW
+    const h = popupRef.current?.offsetHeight || 0
+    const left = Math.max(12, Math.min(r.right + 8, window.innerWidth - w - 12))
+    const top  = Math.max(12, Math.min(r.top - 6, window.innerHeight - h - 12))
+    setPos({ left, top })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   return (
     <span style={{ position: 'relative', display: 'inline-block', verticalAlign: 'middle' }}>
-      <button onClick={() => setOpen(o => !o)} title="Learn more"
+      <button ref={btnRef} onClick={() => setOpen(o => !o)} title="Learn more"
         style={{
-          width: 17, height: 17, borderRadius: '50%', border: `1.5px solid ${C.primary}`,
-          background: open ? C.primary : 'transparent', color: open ? 'white' : C.primary,
-          fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'inline-flex',
-          alignItems: 'center', justifyContent: 'center', marginLeft: 6, flexShrink: 0, padding: 0,
-        }}>ⓘ</button>
+          width: 18, height: 18, border: 'none', background: 'none', padding: 0,
+          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          marginLeft: 6, flexShrink: 0, lineHeight: 1, transition: 'all 0.15s',
+        }}>
+        <svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="7.25" fill={open ? C.primary : C.primarySoft} stroke={C.primary} strokeWidth="1.5" />
+          <circle cx="9" cy="5.7" r="1.05" fill={open ? '#fff' : C.primary} />
+          <rect x="8.15" y="8.1" width="1.7" height="5" rx="0.85" fill={open ? '#fff' : C.primary} />
+        </svg>
+      </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
-          <div style={{
-            position: 'absolute', left: 22, top: -6, zIndex: 999,
-            background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
-            padding: '14px 16px', width, boxShadow: shadow, fontSize: 12,
-            color: C.text, lineHeight: 1.7, whiteSpace: 'pre-line',
-          }}>
-            {content}
-          </div>
+          {isWide ? (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '16px 20px', width: 560, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow,
+              fontSize: 12, color: C.text,
+            }}>
+              {itemsTitle && (
+                <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: 'uppercase',
+                  letterSpacing: 1, marginBottom: 12 }}>{itemsTitle}</div>
+              )}
+              <div style={{ columns: '2 230px', columnGap: 22 }}>
+                {items.map(it => (
+                  <div key={it.label} style={{ breakInside: 'avoid', marginBottom: 13 }}>
+                    <div style={{ fontWeight: 800, fontSize: 12.5, color: C.text, marginBottom: 3 }}>{it.label}</div>
+                    <div style={{ fontWeight: 400, fontSize: 11.5, color: C.muted, lineHeight: 1.55, whiteSpace: 'pre-line' }}>{it.desc}</div>
+                  </div>
+                ))}
+              </div>
+              {footer && (
+                <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px dashed ${C.border}`,
+                  fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: 1.6 }}>{footer}</div>
+              )}
+            </div>
+          ) : (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '14px 16px', width, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow, fontSize: 12,
+              color: C.text, lineHeight: 1.7, whiteSpace: 'pre-line',
+            }}>
+              {content}
+            </div>
+          )}
         </>
       )}
     </span>
@@ -105,12 +173,16 @@ const LCTooltip = ({ active, payload, label, C, metricLabel }) => {
   const train = payload.find(p => p.dataKey?.includes('train'))?.value
   const val   = payload.find(p => p.dataKey?.includes('val'))?.value
   const gap   = (train != null && val != null) ? Math.abs(train - val) : null
+  // `label` is the percentage (the axis's own dataKey); the absolute
+  // sample count for the SAME point rides along on the hovered payload's
+  // own data object regardless of which line (train/val) triggered it.
+  const absSize = payload[0]?.payload?.training_size
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
       padding: '10px 14px', boxShadow: shadow, minWidth: 200 }}>
       <div style={{ fontWeight: 700, fontSize: 12, color: C.text, marginBottom: 8 }}>
-        Training Size: {Number(label).toLocaleString()} samples
+        Training Size: {Number(label).toFixed(1)}%{absSize != null ? ` (${absSize.toLocaleString()} samples)` : ''}
       </div>
       {train != null && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12 }}>
@@ -189,57 +261,47 @@ const SuggestionSection = ({ suggestion, onGoToSampling, onGoToTraining }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // INFO ICON CONTENT
 // ─────────────────────────────────────────────────────────────────────────────
-const INFO_LC = `Learning Curve
+const INFO_LC = {
+  itemsTitle: 'Learning Curve',
+  footer: 'The vertical dashed line marks the Optimal Data Threshold — where validation performance plateaued. More data beyond this point is unlikely to help.',
+  items: [
+    { label: 'What It Answers', desc: 'A learning curve answers one question: "Does my model get better if I give it more training data?"' },
+    { label: 'Training Curve (teal)', desc: 'Shows how well the model fits its own training data. It usually starts high and can dip slightly as more data is added — it gets harder to perfectly fit a bigger set.' },
+    { label: 'Validation Curve (amber)', desc: 'Shows how well the model generalizes to unseen data. It usually starts low (too little data to generalize from) and rises as more data is added.' },
+    { label: 'Reading the Gap', desc: 'Narrow gap + both high → Good fit (ideal).\nWide gap, training high, validation low → Overfitting.\nNarrow gap + both low → Underfitting.\nBoth still rising at the rightmost point → Model needs more data.' },
+  ],
+}
 
-A learning curve answers one question: "Does my model get better if I give it more training data?"
+const INFO_SMOOTH = {
+  itemsTitle: 'EMA Smoothing (Exponential Moving Average)',
+  footer: 'Toggle ON to see the trend clearly. Toggle OFF to see the exact raw computed values.',
+  items: [
+    { label: 'Why It Exists', desc: 'Raw learning curves from cross-validation folds often have small random fluctuations that make the real trend harder to read. EMA smoothing applies a filter that weights recent points more heavily while preserving the overall direction.' },
+    { label: 'Formula', desc: 'Smoothed[i] = α × Raw[i] + (1 − α) × Smoothed[i−1]\nWith α = 0.35 (PRISM\'s default): each point is 35% its actual value, 65% the previous smoothed value.' },
+  ],
+}
 
-The Training Curve (teal) shows how well the model fits its own training data. It usually starts high and can dip slightly as more data is added — it gets harder to perfectly fit a bigger set.
+const INFO_GAP = {
+  itemsTitle: 'The Generalization Gap',
+  items: [
+    { label: 'What It Is', desc: 'The shaded region between the Training and Validation curves is the Generalization Gap.' },
+    { label: 'Small Gap, Both High', desc: 'The model generalizes well — the target state.' },
+    { label: 'Wide Gap, Training >> Validation', desc: 'Overfitting — the model memorized training data and struggles on new examples.' },
+    { label: 'Gap Stays Wide at Large Sizes', desc: 'More data will only partially help — the model itself may be too complex.' },
+    { label: 'Gap Narrows as Size Increases', desc: 'The overfitting is data-related — more data (or oversampling) would help.' },
+    { label: 'Both Low, Small Gap', desc: 'Underfitting — the model is too simple to learn the pattern at all.' },
+  ],
+}
 
-The Validation Curve (amber) shows how well the model generalizes to unseen data. It usually starts low (too little data to generalize from) and rises as more data is added.
-
-The shaded Generalization Gap between the curves is the health indicator:
-• Narrow gap + both high → Good fit (ideal)
-• Wide gap, training high, validation low → Overfitting
-• Narrow gap + both low → Underfitting
-• Both still rising at the rightmost point → Model needs more data
-
-The vertical dashed line marks the Optimal Data Threshold — where validation performance plateaued. More data beyond this point is unlikely to help.`
-
-const INFO_SMOOTH = `EMA Smoothing (Exponential Moving Average)
-
-Raw learning curves from cross-validation folds often have small random fluctuations that make the real trend harder to read.
-
-EMA smoothing applies a filter that weights recent points more heavily while preserving the overall direction.
-
-Formula: Smoothed[i] = α × Raw[i] + (1 − α) × Smoothed[i−1]
-
-With α = 0.35 (PRISM's default): each point is 35% its actual value, 65% the previous smoothed value.
-
-Toggle ON to see the trend clearly. Toggle OFF to see the exact raw computed values.`
-
-const INFO_GAP = `The Generalization Gap
-
-The shaded region between the Training and Validation curves is the Generalization Gap.
-
-Small gap, both high: the model generalizes well — the target state.
-
-Wide gap, training much higher than validation: overfitting — the model memorized training data and struggles on new examples.
-
-Gap stays wide even at large training sizes: more data will only partially help — the model itself may be too complex.
-
-Gap narrows as training size increases: the overfitting is data-related — more data (or oversampling) would help.
-
-Both lines low with a small gap: underfitting — the model is too simple to learn the pattern at all.`
-
-const INFO_OPTIMAL = `Optimal Data Threshold
-
-The vertical dashed line marks the training size where validation performance stopped improving meaningfully (less than 0.3% per step).
-
-Beyond this point, more training data brings diminishing returns — the model has learned what it can from this architecture.
-
-If the threshold sits well below your full training size: you likely have more data than the model benefits from — undersampling could save computation time without hurting accuracy.
-
-If the threshold sits at or beyond your full training size: the model is still improving. More data would help — consider oversampling or collecting more real data.`
+const INFO_OPTIMAL = {
+  itemsTitle: 'Optimal Data Threshold',
+  items: [
+    { label: 'What The Line Marks', desc: 'The vertical dashed line marks the training size where validation performance stopped improving meaningfully (less than 0.3% per step).' },
+    { label: 'Beyond This Point', desc: 'More training data brings diminishing returns — the model has learned what it can from this architecture.' },
+    { label: 'If Threshold Is Well Below Full Size', desc: 'You likely have more data than the model benefits from — undersampling could save computation time without hurting accuracy.' },
+    { label: 'If Threshold Is At/Beyond Full Size', desc: 'The model is still improving. More data would help — consider oversampling or collecting more real data.' },
+  ],
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
@@ -289,6 +351,7 @@ export default function LearningCurvePage({
     const c = data.curves[metric]
     return c.training_sizes.map((size, i) => ({
       training_size: size,
+      training_pct: c.training_pct?.[i],
       train_mean: c.train_mean[i], val_mean: c.val_mean[i],
       train_smooth: c.train_smooth?.[i], val_smooth: c.val_smooth?.[i],
       gap_low:  Math.min(c.train_mean[i] ?? 0, c.val_mean[i] ?? 0),
@@ -297,6 +360,7 @@ export default function LearningCurvePage({
   }, [data, metric])
 
   const optimalSize  = data?.optimal_size
+  const optimalPct   = data?.optimal_pct
   const pattern       = data?.pattern
   const PATTERN_META = {
     good_fit:        { label: '✓ Good Fit',        color: C.success, bg: C.successSoft },
@@ -311,7 +375,7 @@ export default function LearningCurvePage({
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'learning_curve'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'learning_curve'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <VersionsBar versions={versions} />
       <div style={{ padding: '4px 32px 0', fontSize: 11, color: C.muted }}>
         📌 Analysis only — no new dataset version is created on this page. It reads the model trained on
@@ -399,9 +463,9 @@ export default function LearningCurvePage({
                   borderRadius: '50%', background: 'white', transition: 'left 0.2s' }} />
               </div>
               <span style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>EMA Smoothing</span>
-              <InfoIcon content={INFO_SMOOTH} width={280} />
+              <InfoIcon {...INFO_SMOOTH} width={280} />
             </div>
-            <InfoIcon content={INFO_LC} width={340} />
+            <InfoIcon {...INFO_LC} width={340} />
           </div>
 
           {/* ── MAIN TWO-COLUMN LAYOUT (60/38-ish, via fr units) ── */}
@@ -416,7 +480,7 @@ export default function LearningCurvePage({
                   <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{metricLabel} vs. Training Set Size</div>
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 2, display: 'flex', alignItems: 'center' }}>
                     {descriptions.metrics?.[metric] || ''}
-                    <InfoIcon content={INFO_GAP} width={300} />
+                    <InfoIcon {...INFO_GAP} width={300} />
                   </div>
                 </div>
                 <span style={{ fontSize: 10, color: C.muted, whiteSpace: 'nowrap' }}>Drag below to zoom</span>
@@ -426,9 +490,18 @@ export default function LearningCurvePage({
                 <ResponsiveContainer width="100%" height={340}>
                   <ComposedChart data={chartData} margin={{ top: 12, right: 24, bottom: 30, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} opacity={0.5} vertical={false} />
-                    <XAxis dataKey="training_size" type="number" tick={{ fontSize: 10, fill: C.muted }}
-                      tickFormatter={v => v.toLocaleString()}
-                      label={{ value: 'Training Set Size (samples)', position: 'insideBottom', offset: -18, fontSize: 11, fill: C.muted }} />
+                    {/* Percentage of the available training data, not raw
+                        sample count - a fixed 0-100 domain only makes sense
+                        as a percentage (dataset-size-independent); absolute
+                        sample counts can't universally span "0 to 100" at
+                        all (a large dataset would run into the thousands).
+                        domain={[0,100]} pins the axis to the full range
+                        regardless of where the first/last real data point
+                        falls, so the curve always starts right at the
+                        y-axis and reaches the right edge. */}
+                    <XAxis dataKey="training_pct" type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: C.muted }}
+                      tickFormatter={v => `${v}%`}
+                      label={{ value: 'Training Set Size (% of available data)', position: 'insideBottom', offset: -18, fontSize: 11, fill: C.muted }} />
                     <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10, fill: C.muted }}
                       tickFormatter={v => v.toFixed(2)}
                       label={{ value: metricLabel, angle: -90, position: 'insideLeft', fontSize: 11, fill: C.muted, dx: 12 }} />
@@ -447,16 +520,16 @@ export default function LearningCurvePage({
                     <Line type="monotone" dataKey={smoothing ? 'val_smooth' : 'val_mean'} stroke={C.warning} strokeWidth={2.5}
                       dot={{ r: 3, fill: C.warning, strokeWidth: 0 }} activeDot={{ r: 5, strokeWidth: 0 }} name="Validation" isAnimationActive={false} />
 
-                    {optimalSize != null && (
-                      <ReferenceLine x={optimalSize} stroke={C.muted} strokeDasharray="6,4" strokeWidth={1.5}
+                    {optimalPct != null && (
+                      <ReferenceLine x={optimalPct} stroke={C.muted} strokeDasharray="6,4" strokeWidth={1.5}
                         label={{ value: 'Optimal Threshold', position: 'insideTopLeft', fontSize: 9, fill: C.muted, dy: -4 }} />
                     )}
 
                     <Tooltip content={<LCTooltip C={C} metricLabel={metricLabel} />} />
                     <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: 11, paddingBottom: 6 }}
                       formatter={val => <span style={{ color: C.muted }}>{val}</span>} />
-                    <Brush dataKey="training_size" height={22} stroke={C.border} fill={C.faint} travellerWidth={6}
-                      tickFormatter={v => v?.toLocaleString?.() ?? v} />
+                    <Brush dataKey="training_pct" height={22} stroke={C.border} fill={C.faint} travellerWidth={6}
+                      tickFormatter={v => `${v}%`} />
                   </ComposedChart>
                 </ResponsiveContainer>
               ) : (
@@ -476,7 +549,7 @@ export default function LearningCurvePage({
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                     <span style={{ color: C.muted, letterSpacing: 2 }}>- - -</span>
                     <span style={{ color: C.muted }}>Optimal Threshold</span>
-                    <InfoIcon content={INFO_OPTIMAL} width={280} />
+                    <InfoIcon {...INFO_OPTIMAL} width={280} />
                   </div>
                 </div>
               )}

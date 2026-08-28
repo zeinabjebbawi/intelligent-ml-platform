@@ -238,7 +238,7 @@ const ScalingDropdown = ({ C, col, value, suggestion, onChange, loading, locked 
         disabled={loading || locked}
         title={locked ? 'Finish encoding every categorical column first' : undefined}
         style={{
-          width: '100%', padding: '5px 20px 5px 6px', fontSize: 10.5,
+          width: '100%', boxSizing: 'border-box', padding: '5px 20px 5px 6px', fontSize: 10.5,
           border: `1px solid ${value ? C.primary : C.border}`,
           borderRadius: 6, fontWeight: value ? 700 : 400,
           background: locked ? C.faint : (value ? C.primarySoft : C.card),
@@ -348,7 +348,22 @@ function DatasetTable({
       <div style={{ padding: '10px 16px 4px', borderBottom: `1px dashed ${C.border}` }}>
         <SectionTag C={C} icon="✎" label="Encoding" sub="select for categorical columns" />
       </div>
-      <div style={{ display: 'flex', width: totalWidth, padding: '6px 6px 6px', paddingLeft: ROW_N_W + 6 }}>
+      {/* No explicit width + horizontal padding here on purpose. This row
+          used to be `width: totalWidth` (which already bakes in ROW_N_W of
+          space for the "#" column) PLUS `paddingLeft: ROW_N_W + 6` on top —
+          in default content-box sizing, padding adds OUTSIDE the declared
+          width, so that double-booked the row-number offset and rendered
+          the whole row ~ROW_N_W+12px wider than the table, with every pill
+          sitting 6px off its real column and the last one hanging past the
+          table's right edge. Invisible on a small dataset (colWidth is
+          generous, nothing scrolls) — visible as pills drifting past the
+          columns on a wide one that's actually forced to scroll. A real
+          spacer item — mirroring the table's own "#" <colgroup> entry —
+          plus zero horizontal padding makes this row's rendered width
+          exactly ROW_N_W + cols.length*colWidth, identical to the table,
+          by construction rather than by keeping two numbers in sync. */}
+      <div style={{ display: 'flex', padding: '6px 0' }}>
+        <div style={{ width: ROW_N_W, flexShrink: 0 }} />
         {cols.map(col => (
           <div key={col.name} style={{ width: colWidth, flexShrink: 0 }}>
             {col.inferred_type === 'categorical' && col.name !== targetCol && (
@@ -374,8 +389,19 @@ function DatasetTable({
       {/* Dataset table — capped body height, own vertical scroll, sticky
           header (see TABLE_BODY_MAX_HEIGHT) so a 50-row dataset doesn't push
           the encoding/scaling control rows and Apply button far down the
-          page; those controls stay in view around this inner scroll area. */}
-      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
+          page; those controls stay in view around this inner scroll area.
+          width: totalWidth is required here — without it this div defaults
+          to auto (= the OUTER container's visible width, not the table's
+          real width), and overflowX:hidden then permanently clips the table
+          past that point with no way to scroll to it. On a wide dataset that
+          forces horizontal scroll (many columns, colWidth clamped to
+          MIN_COL_W), the encoding/scaling pill rows below have no such clip
+          and correctly scroll the full width, so past the clip point their
+          pills render with nothing left of the table under them — floating
+          in blank space past the table's cut-off right edge. Giving this
+          wrapper the same explicit width as the table (and the pill rows)
+          keeps all three in lockstep at every scroll position. */}
+      <div style={{ width: totalWidth, maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: totalWidth }}>
           <colgroup>
             <col style={{ width: ROW_N_W }} />
@@ -410,13 +436,30 @@ function DatasetTable({
       <div style={{ padding: '10px 16px 4px', borderTop: `1px dashed ${C.border}` }}>
         <SectionTag C={C} icon="⚖" label="Scaling" sub={scalingLocked ? '🔒 finish encoding first' : 'numeric columns only'} />
       </div>
-      <div style={{ display: 'flex', width: totalWidth, padding: '0 6px 12px', paddingLeft: ROW_N_W + 6 }}>
+      {/* Same fix as the encoding row above — a real ROW_N_W spacer instead
+          of the width+paddingLeft double-booking, so this row can never
+          render wider than the table (see the comment above for why). */}
+      <div style={{ display: 'flex', paddingBottom: 12 }}>
+        <div style={{ width: ROW_N_W, flexShrink: 0 }} />
         {cols.map(col => (
           <div key={col.name} style={{ width: colWidth, flexShrink: 0 }}>
             {col.inferred_type === 'numeric' && (
               <ScalingDropdown C={C} col={col} value={scaleChoices[col.name] || ''}
                 suggestion={col.suggested_scaler} onChange={onScale} loading={loadingCol === col.name}
                 locked={scalingLocked} />
+            )}
+            {/* Non-numeric columns get no scaler — but leaving their slot
+                silently blank made the row of scaling pills look shorter
+                or oddly spaced than the column headers above it (worse the
+                more non-numeric columns a dataset has, e.g. an ID column).
+                An explicit placeholder, matching the encoding row's "🎯
+                target" pattern, keeps every column slot visually accounted
+                for so the pill row always reads as exactly one-per-column. */}
+            {col.inferred_type !== 'numeric' && (
+              <div style={{ textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: C.muted,
+                padding: '5px 6px', border: `1px dashed ${C.border}`, borderRadius: 6 }} title="Categorical columns aren't scaled">
+                — n/a
+              </div>
             )}
           </div>
         ))}
@@ -444,8 +487,11 @@ function AppliedDataTable({ C, cols, rows, typeColors }) {
       {/* Same capped-height, sticky-header inner scroll as DatasetTable —
           this is the "Before"/"After" table, so without a cap a 50-row
           dataset would push the OTHER table (and, pre-comparison, the
-          Apply button) far down the page. */}
-      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
+          Apply button) far down the page. width: totalWidth is required —
+          see the matching comment in DatasetTable for why (without it, a
+          wide dataset gets silently clipped at the container's visible
+          width instead of scrolling to its real width). */}
+      <div style={{ width: totalWidth, maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: totalWidth }}>
           <colgroup>
             <col style={{ width: ROW_N_W }} />
@@ -550,8 +596,12 @@ function PreviewTable({ C, profile, encodingResults, scalingResults }) {
       {/* Capped body height + its own vertical scroll, same convention as
           DatasetTable/AppliedDataTable (TABLE_BODY_MAX_HEIGHT) — without
           this, a many-row dataset made this preview (and the whole page)
-          grow arbitrarily tall once any column was actually transformed. */}
-      <div style={{ maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
+          grow arbitrarily tall once any column was actually transformed.
+          width: totalWidth is required — see the matching comment in
+          DatasetTable for why (without it, a wide dataset gets silently
+          clipped at the container's visible width instead of scrolling to
+          its real width). */}
+      <div style={{ width: totalWidth, maxHeight: TABLE_BODY_MAX_HEIGHT, overflowY: 'auto', overflowX: 'hidden' }}>
       <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: totalWidth }}>
         <colgroup>
           <col style={{ width: ROW_N_W }} />
@@ -864,7 +914,7 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
-      <TopNav active={active || 'encoding'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'encoding'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <SharedVersionsBar versions={versions} />
 
       {!dismissed && (

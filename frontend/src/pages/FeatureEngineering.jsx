@@ -970,7 +970,7 @@ export default function FeatureEngineeringPage({ projectData, onNext, onUpdateDa
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
-      <TopNav active={active || 'feature_engineering'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'feature_engineering'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <FEHeader activeTab={activeTab} setActiveTab={setActiveTab} />
       <StickyVersionsBar versions={versions} />
 

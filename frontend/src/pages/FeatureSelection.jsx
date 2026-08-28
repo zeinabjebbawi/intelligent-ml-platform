@@ -114,7 +114,12 @@ const CorrelationHeatmap = ({ data, multicolPairs, targetCol, expanded = false }
   // breathe instead.
   const CELL = expanded
     ? Math.max(26, Math.min(58, 900 / N))
-    : Math.max(16, Math.min(34, 460 / N))
+    // Cap raised 34->40 and budget 460->520 per explicit request to widen
+    // (and, since cells are square, proportionally lengthen) the in-page
+    // heatmap - still capped, not unbounded, so a dataset with many
+    // features doesn't blow past the card's width; the container's own
+    // `overflowX: 'auto'` is the safety net either way.
+    : Math.max(18, Math.min(40, 520 / N))
   const LBL = expanded ? 108 : 82
   // PAD_TOP is the headroom reserved above the grid for the column labels.
   // Oblique (-45°) rotation still clipped longer names because a diagonal
@@ -126,7 +131,15 @@ const CorrelationHeatmap = ({ data, multicolPairs, targetCol, expanded = false }
   // `overflow: 'visible'` on the <svg> stays as a hard guarantee on top of
   // that headroom (an <svg> clips its own content at its boundary by
   // default, unlike ordinary HTML elements).
-  const PAD_TOP = expanded ? 160 : 140
+  // Non-expanded PAD_TOP trimmed 140->105 per explicit request to remove
+  // the excess whitespace above the grid: the longest label this view ever
+  // draws is capped at 12 visible characters (`lbl.length > 14 ? slice(0,
+  // 12)+'…' : lbl` below) at fontSize<=11, whose rotated vertical reach is
+  // ~73px - 105 leaves a real ~20px safety margin above that, not a
+  // guess (140 left ~57px of pure dead space by the same math). Expanded
+  // (fullscreen modal) is untouched - it already has real room to breathe
+  // and wasn't part of this request.
+  const PAD_TOP = expanded ? 160 : 105
   const PAD_BOTTOM = 10
   const LABEL_Y = PAD_TOP - 10
 
@@ -265,15 +278,28 @@ const RedundancyRelevanceChart = ({ data, expanded = false }) => {
   const [hovered, setHovered] = useState(null)
   if (!data?.length) return null
 
-  const REC_COLORS = {
-    strong: C.success, moderate: C.warning, redundant_high: YELLOW,
-    weak: C.muted, weak_redundant: C.danger,
+  // Dot color computed directly from each point's own (signal_tier,
+  // is_redundant) pair — NOT the backend's collapsed `recommendation`
+  // string, which only has 5 buckets because moderate-redundant and
+  // strong-redundant both fold into a single "redundant_high" (that
+  // collapse is still correct for the table badges/heatmap borders that
+  // also read `recommendation`, so it wasn't changed there - this chart
+  // just stopped relying on it for dot color specifically). Per explicit
+  // rule: Moderate is ALWAYS yellow regardless of redundancy (one color,
+  // not two shades like the background zones use); Weak/Strong DO split
+  // by redundancy since those are visually and semantically distinct here.
+  const dotColor = (tier, isRedundant) => {
+    if (tier === 'moderate') return YELLOW
+    if (tier === 'weak') return isRedundant ? C.danger : C.muted
+    return isRedundant ? BABY_BLUE : C.success // strong
   }
-  const REC_LABELS = {
-    strong: 'Strong independent signal', moderate: 'Moderate signal',
-    redundant_high: 'Relevant but redundant', weak: 'Weak signal',
-    weak_redundant: 'Weak & redundant',
-  }
+  const DOT_LEGEND = [
+    { key: 'weak_ind',    color: C.muted,   label: 'Weak & Independent' },
+    { key: 'weak_red',    color: C.danger,  label: 'Weak & Redundant' },
+    { key: 'moderate',    color: YELLOW,    label: 'Moderate (independent or redundant)' },
+    { key: 'strong_ind',  color: C.success, label: 'Strong Independent' },
+    { key: 'strong_red',  color: BABY_BLUE, label: 'Strong but Redundant' },
+  ]
 
   // Smaller default footprint (H was 320 — taller than the card comfortably
   // fit next to everything else on the page, forcing a scroll) so the whole
@@ -295,17 +321,15 @@ const RedundancyRelevanceChart = ({ data, expanded = false }) => {
   const topH     = yThresh - PT          // "high redundancy" band height
   const botH     = (H - PB) - yThresh    // "low redundancy" band height
 
-  // Region fills mostly match the REC_COLORS bucket a dot landing there
-  // would be drawn with (moderate/strong "redundant" zones share YELLOW,
-  // matching the backend's single shared `redundant_high` dot bucket for
-  // both tiers) — except two explicit, deliberate exceptions kept exactly
-  // as requested even though they diverge from that dot-color mapping:
-  // (1) the weak column's shading is grey-on-top / red-on-bottom, the
-  // opposite of what a dot's own color there would be (a request repeated
-  // multiple times, so treated as a firm, final preference for this one
-  // column — background tint only, dot colors/logic are untouched); (2)
-  // the strong-redundant zone uses BABY_BLUE as a purely decorative
-  // background accent instead of YELLOW, again visual-only.
+  // Region fills mostly match what dotColor() would draw a point landing
+  // there with (moderate top/bottom both YELLOW, strong-independent
+  // green, strong-redundant BABY_BLUE) — except one explicit, deliberate
+  // exception kept exactly as requested even though it diverges from the
+  // dot-color mapping: the weak column's shading is grey-on-top / red-on-
+  // bottom, the opposite of what a dot's own color there is (a request
+  // repeated multiple times, so treated as a firm, final preference for
+  // this one column — background tint only, dot colors/logic are
+  // unaffected by it).
   const regions = [
     // weak (0 – 0.3) — deliberately inverted from the dot-color mapping.
     { x: PL,       y: PT,     w: xWeakEnd - PL,       h: topH, fill: C.muted,   op: '14' }, // weak & redundant
@@ -367,7 +391,7 @@ const RedundancyRelevanceChart = ({ data, expanded = false }) => {
         {data.map((d) => {
           const x = scaleX(d.relevance)
           const y = scaleY(d.redundancy)
-          const color = REC_COLORS[d.recommendation] || C.muted
+          const color = dotColor(d.signal_tier, d.is_redundant)
           const isHov = hovered === d.name
           return (
             <g key={d.name}
@@ -384,10 +408,10 @@ const RedundancyRelevanceChart = ({ data, expanded = false }) => {
         })}
       </svg>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 8 }}>
-        {Object.entries(REC_COLORS).map(([key, color]) => (
+        {DOT_LEGEND.map(({ key, color, label }) => (
           <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
             <div style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />
-            <span style={{ color: C.muted }}>{REC_LABELS[key]}</span>
+            <span style={{ color: C.muted }}>{label}</span>
           </div>
         ))}
       </div>
@@ -437,9 +461,48 @@ const TopTwoScatter = ({ top2 }) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// REDUNDANCY RANKING — clustering's replacement for the Feature → Target
+// Importance chart above. Same visual construction (horizontal BarChart,
+// same axis/reference-line/tooltip conventions), but the x-axis is
+// "max |r| with any other feature" instead of "|correlation with target|",
+// since clustering has no target to rank against. Same color bands the
+// FeatureTable's own redundancy MiniBar already uses (>=0.85 danger, >=0.5
+// warning, else success) — one consistent redundancy color scale across
+// the whole page, not a second one invented just for this chart.
+// ─────────────────────────────────────────────────────────────────────────────
+const RedundancyBarChart = ({ data }) => {
+  const { C } = useTheme()
+  if (!data?.length) return null
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(200, data.length * 26 + 20)}>
+      <BarChart data={data} layout="vertical" margin={{ left: 100, right: 30, top: 22, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
+        <XAxis type="number" domain={[0, 1]} tick={{ fontSize: 10, fill: C.muted }} />
+        <YAxis dataKey="feature" type="category" tick={{ fontSize: 10, fill: C.muted }} width={100} />
+        <Tooltip formatter={v => [(v * 100).toFixed(1) + '%', 'Redundancy']}
+          contentStyle={{ fontSize: 11, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text }} />
+        <ReferenceLine x={0.5} stroke={C.warning} strokeDasharray="4,2" />
+        <ReferenceLine x={0.85} stroke={C.danger} strokeDasharray="4,2" />
+        <ReferenceLine x={0.25} stroke="none"
+          label={{ value: 'independent', position: 'top', fontSize: 9, fontWeight: 700, fill: C.success }} />
+        <ReferenceLine x={0.675} stroke="none"
+          label={{ value: 'moderate', position: 'top', fontSize: 9, fontWeight: 700, fill: C.warning }} />
+        <ReferenceLine x={0.925} stroke="none"
+          label={{ value: 'redundant', position: 'top', fontSize: 9, fontWeight: 700, fill: C.danger }} />
+        <Bar dataKey="redundancy" radius={[0, 4, 4, 0]}>
+          {data.map((d, i) => (
+            <Cell key={i} fill={d.redundancy >= 0.85 ? C.danger : d.redundancy >= 0.5 ? C.warning : C.success} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FEATURE LIST TABLE WITH CHECKBOXES
 // ─────────────────────────────────────────────────────────────────────────────
-const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, shapeWarning }) => {
+const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, shapeWarning, isClustering }) => {
   const { C } = useTheme()
   const [expandedGroups, setExpandedGroups] = useState({})
 
@@ -526,12 +589,14 @@ const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, s
           <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
             background: typ.bg, color: typ.color }}>{f.type}</span>
         </td>
-        <td style={{ ...td, minWidth: 100 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <MiniBar val={f.importance} color={f.importance >= 0.3 ? C.success : f.importance >= 0.1 ? C.primary : C.muted} />
-            <span style={{ fontSize: 10, color: C.muted }}>{(f.importance * 100).toFixed(1)}%</span>
-          </div>
-        </td>
+        {!isClustering && (
+          <td style={{ ...td, minWidth: 100 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <MiniBar val={f.importance} color={f.importance >= 0.3 ? C.success : f.importance >= 0.1 ? C.primary : C.muted} />
+              <span style={{ fontSize: 10, color: C.muted }}>{(f.importance * 100).toFixed(1)}%</span>
+            </div>
+          </td>
+        )}
         <td style={{ ...td, minWidth: 100 }}>
           {f.redundancy_na ? (
             <span style={{ fontSize: 10, color: C.muted }}>n/a</span>
@@ -542,12 +607,14 @@ const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, s
             </div>
           )}
         </td>
-        <td style={td}>
-          <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
-            background: rec.bg, color: rec.color }}>
-            {TIER_ICON[f.signal_tier] || ''} {TIER_LABEL[f.signal_tier] || '—'}{f.is_redundant ? ' · Redundant' : ''}
-          </span>
-        </td>
+        {!isClustering && (
+          <td style={td}>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
+              background: rec.bg, color: rec.color }}>
+              {TIER_ICON[f.signal_tier] || ''} {TIER_LABEL[f.signal_tier] || '—'}{f.is_redundant ? ' · Redundant' : ''}
+            </span>
+          </td>
+        )}
         <td style={{ ...td, textAlign: 'center' }}>
           <input type="checkbox" checked={isSelected}
             onChange={() => onToggle(f.name, f.one_hot_group)}
@@ -584,11 +651,15 @@ const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, s
           </td>
           <td style={td}><span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px',
             borderRadius: 5, background: C.blueSoft, color: C.blue }}>group</span></td>
-          <td style={{ ...td, minWidth: 100 }}>
-            <span style={{ fontSize: 11, color: C.muted }}>{(avgImportance * 100).toFixed(1)}% avg</span>
-          </td>
+          {!isClustering && (
+            <td style={{ ...td, minWidth: 100 }}>
+              <span style={{ fontSize: 11, color: C.muted }}>{(avgImportance * 100).toFixed(1)}% avg</span>
+            </td>
+          )}
           <td style={td}><span style={{ fontSize: 11, color: C.muted }}>—</span></td>
-          <td style={td}><span style={{ fontSize: 10, color: C.muted }}>One-hot group</span></td>
+          {!isClustering && (
+            <td style={td}><span style={{ fontSize: 10, color: C.muted }}>One-hot group</span></td>
+          )}
           <td style={{ ...td, textAlign: 'center' }}>
             <input type="checkbox"
               checked={allSel} ref={el => el && (el.indeterminate = !allSel && !noneSel)}
@@ -612,9 +683,9 @@ const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, s
             <th style={th}>#</th>
             <th style={th}>Feature</th>
             <th style={th}>Type</th>
-            <th style={th}>Importance</th>
+            {!isClustering && <th style={th}>Importance</th>}
             <th style={th}>Redundancy</th>
-            <th style={th}>Signal</th>
+            {!isClustering && <th style={th}>Signal</th>}
             <th style={{ ...th, textAlign: 'center' }}>Keep</th>
           </tr>
         </thead>
@@ -630,18 +701,42 @@ const FeatureTable = ({ features, selected, onToggle, onToggleGroup, ohGroups, s
 // ─────────────────────────────────────────────────────────────────────────────
 // MULTICOLLINEARITY WARNING CARDS
 // ─────────────────────────────────────────────────────────────────────────────
-const MulticolWarnings = ({ pairs, onNavigate }) => {
+const MulticolWarnings = ({ pairs, onNavigate, isClustering }) => {
   const { C } = useTheme()
   const warnings = pairs.filter(p => p.severity === 'warning')
     .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation))
+
+  // Clustering-specific explanation of WHY this check matters — placed
+  // above everything else, since without a target column this is the
+  // single most important thing on the whole page (there is no other
+  // criterion for removing a feature in K-Means at all).
+  const clusteringNote = isClustering && (
+    <div style={{ padding: '12px 16px', borderRadius: 10, background: C.warningSoft,
+      border: `1px solid ${C.warning}40`, fontSize: 12.5, color: C.text, lineHeight: 1.6 }}>
+      <strong>Why this matters for K-Means:</strong> clustering has no target column, so
+      redundancy is the ONLY valid reason to remove a feature here. K-Means groups points by
+      minimizing Euclidean distance to each cluster's center — every feature contributes to
+      that distance independently. Two highly correlated features (e.g. PetalLength and
+      PetalWidth, r ≈ 0.90) are both still measured separately in the distance calculation,
+      so that one underlying dimension gets counted twice. This pulls cluster centers toward
+      the axis the redundant pair shares and distorts the resulting cluster shapes — the same
+      real signal ends up over-weighted purely because it happens to live in two columns
+      instead of one.
+    </div>
+  )
+
   if (!warnings.length) return (
-    <div style={{ textAlign: 'center', padding: '18px 0', color: C.success, fontSize: 13, fontWeight: 600 }}>
-      ✓ No multicollinearity issues detected (all feature pairs |r| &lt; 0.85)
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {clusteringNote}
+      <div style={{ textAlign: 'center', padding: '18px 0', color: C.success, fontSize: 13, fontWeight: 600 }}>
+        ✓ No multicollinearity issues detected (all feature pairs |r| &lt; 0.85)
+      </div>
     </div>
   )
   const top = warnings[0]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {clusteringNote}
       {/* Recommended alternative to dropping a feature outright — combine
           the two redundant features into one on Feature Engineering
           instead, so predictive signal unique to either one isn't just
@@ -696,10 +791,20 @@ const MulticolWarnings = ({ pairs, onNavigate }) => {
 // INFO / PHILOSOPHY WIDGET (ℹ) — collapsed by default, same pulsing-button
 // pattern as Sampling.jsx's DescriptionWidget.
 // ─────────────────────────────────────────────────────────────────────────────
-const InfoBanner = () => {
+const InfoBanner = ({ isClustering }) => {
   const { C } = useTheme()
   const [open, setOpen] = useState(false)
-  const TEXT = `This page uses ONLY statistical methods — no model has been trained yet.
+  const TEXT = isClustering ? `This page uses ONLY statistical methods — no model has been trained yet.
+
+Unlike classification/regression, clustering (K-Means) has no target column — there is nothing to measure feature importance against. The ONLY valid criterion for removing a feature here is inter-feature REDUNDANCY.
+
+Correlation heatmap: shows how strongly every pair of NUMERIC features is related to every OTHER feature (there is no target row/column to show here). Diagonal = 1.0.
+
+Redundancy ranking: each feature's max |correlation| with any other feature, sorted highest first. A feature above the 0.85 line is essentially duplicating information another column already provides.
+
+Multicollinearity warning: pairs of features with |correlation| ≥ 0.85 both still contribute independently to K-Means' distance calculation, effectively double-weighting that one dimension and distorting cluster shapes. See the note in that section for the full explanation.
+
+One-Hot groups: when a column was one-hot encoded, its binary columns are grouped together. Uncheck the group header to exclude the entire original variable from training.` : `This page uses ONLY statistical methods — no model has been trained yet.
 
 Correlation heatmap: shows how strongly every pair of NUMERIC features is related. Diagonal = 1.0. Strong positive leans toward the accent color; strong negative leans toward red.
 
@@ -728,7 +833,9 @@ One-Hot groups: when a column was one-hot encoded, its binary columns are groupe
           ℹ
         </div>
         <span style={{ fontSize: 13, color: open ? C.primary : C.muted, fontWeight: 600, flex: 1 }}>
-          {open ? 'How to read this page' : 'Statistical feature selection only — click to understand how this page works'}
+          {open ? 'How to read this page' : (isClustering
+            ? 'Statistical feature selection for clustering — click to understand how this works'
+            : 'Statistical feature selection only — click to understand how this page works')}
         </span>
         <span style={{ fontSize: 11, color: C.muted }}>{open ? '▲' : '▼'}</span>
       </div>
@@ -806,19 +913,24 @@ export default function FeatureSelectionPage({
   [getInputPath, projectData])
 
   const targetCol = projectData?.targetColumn
+  // Clustering (K-Means) never has a target column — this page is still
+  // valid and important there (redundancy still distorts K-Means'
+  // Euclidean distance calculation), it just can't rank by feature-target
+  // correlation since no target exists. See analyze()'s clustering branch.
+  const isClustering = projectData?.taskType === 'clustering'
   const done       = isStepDone ? isStepDone('feature_selection') : applied
 
   useEffect(() => {
-    if (!filePath || !targetCol) return
+    if (!filePath || (!targetCol && !isClustering)) return
     setLoading(true)
-    callFS('analyze', { file_path: filePath, target_column: targetCol })
+    callFS('analyze', { file_path: filePath, target_column: targetCol || '', task_type: projectData?.taskType })
       .then(d => {
         setData(d)
         setSelected(new Set(d.features.map(f => f.name)))
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [filePath, targetCol])
+  }, [filePath, targetCol, isClustering, projectData?.taskType])
 
   // Resume: if this step already has a registered version when the page
   // mounts (navigated away after Apply, came back), reconstruct exactly
@@ -828,10 +940,10 @@ export default function FeatureSelectionPage({
   // Sampling.jsx's resume effect (re-derive from the resolved output path,
   // not from any client-only memory).
   useEffect(() => {
-    if (!done || applied || !data || !targetCol) return
+    if (!done || applied || !data || (!targetCol && !isClustering)) return
     const outputPath = getDisplayPath ? getDisplayPath('feature_selection') : null
     if (!outputPath || outputPath === filePath) return
-    callFS('analyze', { file_path: outputPath, target_column: targetCol })
+    callFS('analyze', { file_path: outputPath, target_column: targetCol || '', task_type: projectData?.taskType })
       .then(outData => {
         setData(outData)  // was missing — the page used to keep showing the
         // ORIGINAL pre-selection analysis in every chart/heatmap/table even
@@ -841,7 +953,7 @@ export default function FeatureSelectionPage({
         setApplied(true)
       })
       .catch(() => { /* resume best-effort — stays in the pending selection state if this fails */ })
-  }, [done, applied, data, targetCol, getDisplayPath, filePath])
+  }, [done, applied, data, targetCol, isClustering, projectData?.taskType, getDisplayPath, filePath])
 
   const handleToggle = useCallback((name) => {
     setSelected(prev => {
@@ -861,11 +973,11 @@ export default function FeatureSelectionPage({
   }, [])
 
   const handleApply = useCallback(async () => {
-    if (!filePath || !targetCol || !data) return
+    if (!filePath || (!targetCol && !isClustering) || !data) return
     setApplying(true)
     try {
       const res = await callFS('apply', {
-        file_path: filePath, target_column: targetCol, features_to_keep: [...selected],
+        file_path: filePath, target_column: targetCol || null, features_to_keep: [...selected],
       })
       if (registerVersion)
         await registerVersion('feature_selection', res.new_file_path, 'Feature Selected Version', res.row_count,
@@ -876,13 +988,13 @@ export default function FeatureSelectionPage({
       // importance chart, redundancy scatter, feature table) kept showing
       // the ORIGINAL pre-selection analysis forever after Apply, since
       // nothing ever re-fetched or overwrote `data`.
-      const freshData = await callFS('analyze', { file_path: res.new_file_path, target_column: targetCol })
+      const freshData = await callFS('analyze', { file_path: res.new_file_path, target_column: targetCol || '', task_type: projectData?.taskType })
       setData(freshData)
       setSelected(new Set(freshData.features.map(f => f.name)))
       setApplied(true)
     } catch (e) { setError(e.message) }
     finally { setApplying(false) }
-  }, [filePath, targetCol, data, selected, registerVersion, onUpdateData])
+  }, [filePath, targetCol, isClustering, projectData?.taskType, data, selected, registerVersion, onUpdateData])
 
   const handleRedo = async () => {
     setRedoing(true)
@@ -905,10 +1017,11 @@ export default function FeatureSelectionPage({
   const removedCount  = totalCount - selectedCount
   const weakCount     = (data?.features || []).filter(f => f.signal_tier === 'weak').length
   const strongCount   = data?.n_strong || 0
+  const redundantFeatureCount = (data?.features || []).filter(f => f.recommendation === 'redundant_high').length
 
-  if (!targetCol) return (
+  if (!targetCol && !isClustering) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ textAlign: 'center', padding: '60px 0', color: C.muted }}>
         <div style={{ fontSize: 32 }}>⚠️</div>
         <div style={{ fontWeight: 700, marginTop: 12, color: C.text }}>No target column set.</div>
@@ -919,7 +1032,7 @@ export default function FeatureSelectionPage({
 
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ textAlign: 'center', padding: '80px 0', color: C.muted }}>
         <div style={{ fontSize: 28, marginBottom: 12, display: 'inline-block',
           animation: 'spin 1s linear infinite' }}>⚙</div>
@@ -930,7 +1043,7 @@ export default function FeatureSelectionPage({
   )
   if (error) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`,
         borderRadius: 12, padding: 20, color: C.danger, margin: 20 }}>⚠ {error}</div>
     </div>
@@ -942,12 +1055,21 @@ export default function FeatureSelectionPage({
     .sort((a, b) => b.importance - a.importance)
     .map(f => ({ feature: f.name.length > 16 ? f.name.slice(0, 14) + '…' : f.name,
                  importance: f.importance, unencoded: f.unencoded }))
+  // Same shape as importanceData above, for the clustering-only Redundancy
+  // Ranking bar chart — sorted most-redundant-first, since that's the
+  // actionable end of the list when there's no target to rank by instead.
+  const redundancyData = [...ft]
+    .sort((a, b) => b.redundancy - a.redundancy)
+    .map(f => ({ feature: f.name.length > 16 ? f.name.slice(0, 14) + '…' : f.name,
+                 redundancy: f.redundancy, recommendation: f.recommendation }))
 
-  const analystSummary = `${strongCount} of ${totalCount} feature(s) show strong independent signal · ${weakCount} appear weak · ${data.n_multicol_warnings} redundant pair(s) detected${data.n_unencoded_features > 0 ? ` · ${data.n_unencoded_features} column(s) not yet encoded (Chi-Square/ANOVA used)` : ''}.`
+  const analystSummary = isClustering
+    ? `${totalCount - redundantFeatureCount} of ${totalCount} feature(s) are independent (low redundancy) · ${redundantFeatureCount} redundant · ${data.n_multicol_warnings} redundant pair(s) detected.`
+    : `${strongCount} of ${totalCount} feature(s) show strong independent signal · ${weakCount} appear weak · ${data.n_multicol_warnings} redundant pair(s) detected${data.n_unencoded_features > 0 ? ` · ${data.n_unencoded_features} column(s) not yet encoded (Chi-Square/ANOVA used)` : ''}.`
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', paddingBottom: 100 }}>
-      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'feature_selection'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`,
@@ -978,7 +1100,7 @@ export default function FeatureSelectionPage({
       <SharedVersionsBar versions={versions} />
 
       <div style={{ padding: '20px 32px 0' }}>
-        <InfoBanner />
+        <InfoBanner isClustering={isClustering} />
 
         {/* ── Analyst summary ─────────────────────────────────────────────── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px',
@@ -1002,11 +1124,13 @@ export default function FeatureSelectionPage({
         {/* ── KPI Cards ───────────────────────────────────────────────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 24 }}>
           <MetricCard icon="▤" label="Total Features" value={totalCount} accent={C.primary}
-            sub={`excluding target (${targetCol})`} />
+            sub={isClustering ? 'all numeric columns' : `excluding target (${targetCol})`} />
           <MetricCard icon="✓" label="Selected" value={selectedCount} accent={C.success}
             sub="will be used for training" />
           <MetricCard icon="✕" label="Removed" value={removedCount} accent={C.muted}
-            sub={removedCount > 0 ? `${weakCount} weak feature(s) detected` : 'none removed yet'} />
+            sub={removedCount > 0
+              ? (isClustering ? `${redundantFeatureCount} redundant feature(s) detected` : `${weakCount} weak feature(s) detected`)
+              : 'none removed yet'} />
           <MetricCard icon="⚠" label="Redundant Pairs" value={data.n_multicol_warnings} accent={C.warning}
             sub={data.n_multicol_warnings ? 'pairs with |r| ≥ 0.85' : 'no multicollinearity'} />
         </div>
@@ -1015,7 +1139,9 @@ export default function FeatureSelectionPage({
         <div style={{ display: 'grid', gridTemplateColumns: '56% 42%', gap: 18, marginBottom: 18 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <ChartCard title="Full Correlation Heatmap"
-              sub={`Every numeric feature pair, including the target "${targetCol}". Yellow-bordered = multicollinearity warning; green/red-bordered = strong/weak signal vs. the target.${data.n_unencoded_features > 0 ? ` ${data.n_unencoded_features} unencoded column(s) excluded — see Feature List below.` : ''}`}
+              sub={isClustering
+                ? `Every numeric feature pair (no target column in clustering). Yellow-bordered = multicollinearity warning.`
+                : `Every numeric feature pair, including the target "${targetCol}". Yellow-bordered = multicollinearity warning; green/red-bordered = strong/weak signal vs. the target.${data.n_unencoded_features > 0 ? ` ${data.n_unencoded_features} unencoded column(s) excluded — see Feature List below.` : ''}`}
               badge={
                 <button onClick={() => setHeatmapExpanded(true)} title="Expand heatmap"
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28,
@@ -1028,113 +1154,139 @@ export default function FeatureSelectionPage({
             </ChartCard>
             <ChartCard title="⚠ Multicollinearity Check"
               sub="Pairs of features that are too similar to each other — keeping both adds redundancy, not signal.">
-              <MulticolWarnings pairs={data.multicol_pairs || []} onNavigate={onNavigate} />
+              <MulticolWarnings pairs={data.multicol_pairs || []} onNavigate={onNavigate} isClustering={isClustering} />
             </ChartCard>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <ChartCard title="Feature → Target Importance"
-              sub={`Ranked by statistical association with "${targetCol}". Purely statistical — no model trained.`}>
-              <ResponsiveContainer width="100%" height={Math.max(200, importanceData.length * 26 + 20)}>
-                <BarChart data={importanceData} layout="vertical" margin={{ left: 100, right: 30, top: 22, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
-                  <XAxis type="number" domain={[0, 1]} tick={{ fontSize: 10, fill: C.muted }} />
-                  <YAxis dataKey="feature" type="category" tick={{ fontSize: 10, fill: C.muted }} width={100} />
-                  <Tooltip formatter={v => [(v * 100).toFixed(1) + '%', 'Importance']}
-                    contentStyle={{ fontSize: 11, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text }} />
-                  {/* Only 2 real dashed boundary lines (0.3, 0.6) — no
-                      label attached to either, since a label anchored right
-                      at a line's own x-position collides with its neighbor
-                      when two lines sit close together. Instead each of the
-                      3 tiers gets its own label at ITS zone's horizontal
-                      midpoint (0.15 / 0.45 / 0.8), carried by a 3rd kind of
-                      ReferenceLine with no visible stroke (stroke="none") —
-                      purely a label anchor, not a boundary marker — so all
-                      three names stay spaced out and legible regardless of
-                      how close together 0.3 and 0.6 render on screen. Same
-                      0.3/0.6 thresholds as the Redundancy vs Relevance
-                      chart's REL_WEAK_MAX/REL_MOD_MAX just below — both
-                      charts measure the same |correlation| quantity. */}
-                  <ReferenceLine x={0.3} stroke={C.muted} strokeDasharray="4,2" />
-                  <ReferenceLine x={0.6} stroke={C.success} strokeDasharray="4,2" />
-                  <ReferenceLine x={0.15} stroke="none"
-                    label={{ value: 'weak', position: 'top', fontSize: 9, fontWeight: 700, fill: C.muted }} />
-                  <ReferenceLine x={0.45} stroke="none"
-                    label={{ value: 'moderate', position: 'top', fontSize: 9, fontWeight: 700, fill: C.warning }} />
-                  <ReferenceLine x={0.8} stroke="none"
-                    label={{ value: 'strong', position: 'top', fontSize: 9, fontWeight: 700, fill: C.success }} />
-                  <Bar dataKey="importance" radius={[0, 4, 4, 0]}>
-                    {importanceData.map((d, i) => (
-                      <Cell key={i} fill={d.importance >= 0.6 ? C.success : d.importance >= 0.3 ? C.warning : C.muted} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
+            {!isClustering ? (
+              <>
+                <ChartCard title="Feature → Target Importance"
+                  sub={`Ranked by statistical association with "${targetCol}". Purely statistical — no model trained.`}>
+                  <ResponsiveContainer width="100%" height={Math.max(200, importanceData.length * 26 + 20)}>
+                    <BarChart data={importanceData} layout="vertical" margin={{ left: 100, right: 30, top: 22, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
+                      <XAxis type="number" domain={[0, 1]} tick={{ fontSize: 10, fill: C.muted }} />
+                      <YAxis dataKey="feature" type="category" tick={{ fontSize: 10, fill: C.muted }} width={100} />
+                      <Tooltip formatter={v => [(v * 100).toFixed(1) + '%', 'Importance']}
+                        contentStyle={{ fontSize: 11, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text }} />
+                      {/* Only 2 real dashed boundary lines (0.3, 0.6) — no
+                          label attached to either, since a label anchored right
+                          at a line's own x-position collides with its neighbor
+                          when two lines sit close together. Instead each of the
+                          3 tiers gets its own label at ITS zone's horizontal
+                          midpoint (0.15 / 0.45 / 0.8), carried by a 3rd kind of
+                          ReferenceLine with no visible stroke (stroke="none") —
+                          purely a label anchor, not a boundary marker — so all
+                          three names stay spaced out and legible regardless of
+                          how close together 0.3 and 0.6 render on screen. Same
+                          0.3/0.6 thresholds as the Redundancy vs Relevance
+                          chart's REL_WEAK_MAX/REL_MOD_MAX just below — both
+                          charts measure the same |correlation| quantity. */}
+                      <ReferenceLine x={0.3} stroke={C.muted} strokeDasharray="4,2" />
+                      <ReferenceLine x={0.6} stroke={C.success} strokeDasharray="4,2" />
+                      <ReferenceLine x={0.15} stroke="none"
+                        label={{ value: 'weak', position: 'top', fontSize: 9, fontWeight: 700, fill: C.muted }} />
+                      <ReferenceLine x={0.45} stroke="none"
+                        label={{ value: 'moderate', position: 'top', fontSize: 9, fontWeight: 700, fill: C.warning }} />
+                      <ReferenceLine x={0.8} stroke="none"
+                        label={{ value: 'strong', position: 'top', fontSize: 9, fontWeight: 700, fill: C.success }} />
+                      <Bar dataKey="importance" radius={[0, 4, 4, 0]}>
+                        {importanceData.map((d, i) => (
+                          <Cell key={i} fill={d.importance >= 0.6 ? C.success : d.importance >= 0.3 ? C.warning : C.muted} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </ChartCard>
 
-            <ChartCard title={data.top_2?.feature_1 ? `Top 2 Features: ${data.top_2.feature_1} × ${data.top_2.feature_2}` : 'Top 2 Features'}
-              sub="Scatter of the two most important numeric features, colored by target class. Good separation = high predictive value.">
-              <TopTwoScatter top2={data.top_2} />
-            </ChartCard>
+                <ChartCard title={data.top_2?.feature_1 ? `Top 2 Features: ${data.top_2.feature_1} × ${data.top_2.feature_2}` : 'Top 2 Features'}
+                  sub="Scatter of the two most important numeric features, colored by target class. Good separation = high predictive value.">
+                  <TopTwoScatter top2={data.top_2} />
+                </ChartCard>
+              </>
+            ) : (
+              // Clustering has no target to rank importance against, so this
+              // slot becomes the redundancy ranking instead — same chart
+              // construction as Feature → Target Importance above, just
+              // measuring "max |r| with any other feature" on the x-axis.
+              // No Top-2 scatter either: without a target there's no class
+              // to color the dots by, so a plain scatter here would carry
+              // no interpretive value.
+              <ChartCard title="Feature Redundancy Ranking"
+                sub="Max |r| with any other feature, sorted highest first. High-redundancy features may distort K-Means cluster shapes.">
+                <RedundancyBarChart data={redundancyData} />
+              </ChartCard>
+            )}
           </div>
         </div>
 
-        {/* ── Redundancy vs Relevance (full width) ───────────────────────── */}
-        <ChartCard title="Redundancy vs Relevance — Feature Decision Space"
-          sub="Each dot = one numeric feature. Keep features in the bottom-right (high relevance, low redundancy). Features in the top-right are relevant but redundant — consider dropping one of each redundant pair."
-          style={{ marginBottom: 18 }}
-          badge={
-            <button onClick={() => setRelevanceExpanded(true)} title="Expand chart"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28,
-                borderRadius: 8, border: `1px solid ${C.border}`, background: C.faint, color: C.muted,
-                cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>
-              ⛶
-            </button>
-          }>
-          <RedundancyRelevanceChart data={data.rdv_scatter || []} />
-        </ChartCard>
+        {/* ── Redundancy vs Relevance (full width) — "Relevance" is target
+            correlation, which doesn't exist in clustering; the Redundancy
+            Ranking chart above already covers redundancy alone for that
+            case, so this whole chart is skipped rather than shown empty. */}
+        {!isClustering && (
+          <ChartCard title="Redundancy vs Relevance — Feature Decision Space"
+            sub="Each dot = one numeric feature. Keep features in the bottom-right (high relevance, low redundancy). Features in the top-right are relevant but redundant — consider dropping one of each redundant pair."
+            style={{ marginBottom: 18 }}
+            badge={
+              <button onClick={() => setRelevanceExpanded(true)} title="Expand chart"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28,
+                  borderRadius: 8, border: `1px solid ${C.border}`, background: C.faint, color: C.muted,
+                  cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>
+                ⛶
+              </button>
+            }>
+            <RedundancyRelevanceChart data={data.rdv_scatter || []} />
+          </ChartCard>
+        )}
 
-        {/* ── Pairplot (collapsible) ──────────────────────────────────────── */}
-        <div style={{ marginBottom: 18 }}>
-          <button onClick={() => setShowPair(s => !s)}
-            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-              background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
-              padding: '12px 18px', cursor: 'pointer', fontWeight: 700, fontSize: 13, color: C.muted }}>
-            <span>{showPairplot ? '▲' : '▼'}</span>
-            Show Pairplot — relationships between top features, colored by target class
-            <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 400 }}>
-              (top 5 numeric features · {Object.keys(data.pairplot_data || {}).length} scatter plots)
-            </span>
-          </button>
-          {showPairplot && (
-            <div style={{ background: C.card, border: `1px solid ${C.border}`,
-              borderRadius: '0 0 12px 12px', padding: '20px', borderTop: 'none' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 14 }}>
-                {Object.entries(data.pairplot_data || {}).map(([key, pts]) => {
-                  const [fa, fb] = key.split('||')
-                  const classes  = [...new Set(pts.map(p => p.target))]
-                  const byClass  = Object.fromEntries(classes.map(c => [c, pts.filter(p => p.target === c)]))
-                  return (
-                    <div key={key} style={{ background: C.faint, borderRadius: 10, padding: '10px 12px' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 6 }}>{fa} × {fb}</div>
-                      <ResponsiveContainer width="100%" height={120}>
-                        <ScatterChart margin={{ top: 4, right: 4, bottom: 4, left: -20 }}>
-                          <XAxis dataKey="x" type="number" tick={{ fontSize: 8 }} />
-                          <YAxis dataKey="y" type="number" tick={{ fontSize: 8 }} />
-                          <ZAxis range={[10, 10]} />
-                          <Tooltip contentStyle={{ fontSize: 10 }} />
-                          {classes.map((cls, ci) => (
-                            <Scatter key={cls} data={byClass[cls]} fill={CLASS_COLORS[ci % CLASS_COLORS.length]} opacity={0.6} />
-                          ))}
-                        </ScatterChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )
-                })}
+        {/* ── Pairplot (collapsible) — colors by target class, which has no
+            meaning at all without a target, so it's not shown for
+            clustering rather than rendering an uncolored, uninterpretable
+            grid of scatters. ─────────────────────────────────────────── */}
+        {!isClustering && (
+          <div style={{ marginBottom: 18 }}>
+            <button onClick={() => setShowPair(s => !s)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
+                padding: '12px 18px', cursor: 'pointer', fontWeight: 700, fontSize: 13, color: C.muted }}>
+              <span>{showPairplot ? '▲' : '▼'}</span>
+              Show Pairplot — relationships between top features, colored by target class
+              <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 400 }}>
+                (top 5 numeric features · {Object.keys(data.pairplot_data || {}).length} scatter plots)
+              </span>
+            </button>
+            {showPairplot && (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`,
+                borderRadius: '0 0 12px 12px', padding: '20px', borderTop: 'none' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 14 }}>
+                  {Object.entries(data.pairplot_data || {}).map(([key, pts]) => {
+                    const [fa, fb] = key.split('||')
+                    const classes  = [...new Set(pts.map(p => p.target))]
+                    const byClass  = Object.fromEntries(classes.map(c => [c, pts.filter(p => p.target === c)]))
+                    return (
+                      <div key={key} style={{ background: C.faint, borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 6 }}>{fa} × {fb}</div>
+                        <ResponsiveContainer width="100%" height={120}>
+                          <ScatterChart margin={{ top: 4, right: 4, bottom: 4, left: -20 }}>
+                            <XAxis dataKey="x" type="number" tick={{ fontSize: 8 }} />
+                            <YAxis dataKey="y" type="number" tick={{ fontSize: 8 }} />
+                            <ZAxis range={[10, 10]} />
+                            <Tooltip contentStyle={{ fontSize: 10 }} />
+                            {classes.map((cls, ci) => (
+                              <Scatter key={cls} data={byClass[cls]} fill={CLASS_COLORS[ci % CLASS_COLORS.length]} opacity={0.6} />
+                            ))}
+                          </ScatterChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* ── Feature Selection Table ─────────────────────────────────────── */}
         <ChartCard title="Feature List — select which features to use in training"
@@ -1146,26 +1298,40 @@ export default function FeatureSelectionPage({
                 background: C.card, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: C.text }}>
               Select All
             </button>
-            <button onClick={() => setSelected(new Set(ft.filter(f => f.signal_tier !== 'weak').map(f => f.name)))}
-              style={{ padding: '6px 14px', borderRadius: 7, border: `1px solid ${C.warning}`,
-                background: C.warningSoft, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: C.warning }}>
-              Auto-remove weak features
-            </button>
-            {/* Removes only features that are BOTH weak AND redundant at
-                once — not everything that's weak OR everything that's
-                redundant (a genuinely different, narrower selection than
-                the button above; a moderate/strong feature that happens to
-                be redundant, or a weak feature that isn't redundant, is
-                left untouched by this one). */}
-            <button onClick={() => setSelected(new Set(
-                ft.filter(f => !(f.signal_tier === 'weak' && f.is_redundant)).map(f => f.name)))}
-              style={{ padding: '6px 14px', borderRadius: 7, border: `1px solid ${C.danger}`,
-                background: C.dangerSoft, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: C.danger }}>
-              Remove weak + redundant
-            </button>
+            {isClustering ? (
+              // Clustering has no "weak" concept (no target to be weak
+              // against) — redundancy is the only removal criterion, so
+              // there's exactly one auto-remove button instead of two.
+              <button onClick={() => setSelected(new Set(
+                  ft.filter(f => f.recommendation !== 'redundant_high').map(f => f.name)))}
+                style={{ padding: '6px 14px', borderRadius: 7, border: `1px solid ${C.danger}`,
+                  background: C.dangerSoft, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: C.danger }}>
+                Auto-remove redundant features
+              </button>
+            ) : (
+              <>
+                <button onClick={() => setSelected(new Set(ft.filter(f => f.signal_tier !== 'weak').map(f => f.name)))}
+                  style={{ padding: '6px 14px', borderRadius: 7, border: `1px solid ${C.warning}`,
+                    background: C.warningSoft, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: C.warning }}>
+                  Auto-remove weak features
+                </button>
+                {/* Removes only features that are BOTH weak AND redundant at
+                    once — not everything that's weak OR everything that's
+                    redundant (a genuinely different, narrower selection than
+                    the button above; a moderate/strong feature that happens to
+                    be redundant, or a weak feature that isn't redundant, is
+                    left untouched by this one). */}
+                <button onClick={() => setSelected(new Set(
+                    ft.filter(f => !(f.signal_tier === 'weak' && f.is_redundant)).map(f => f.name)))}
+                  style={{ padding: '6px 14px', borderRadius: 7, border: `1px solid ${C.danger}`,
+                    background: C.dangerSoft, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: C.danger }}>
+                  Remove weak + redundant
+                </button>
+              </>
+            )}
           </div>
           <FeatureTable features={ft} selected={selected} onToggle={handleToggle} onToggleGroup={handleToggleGroup}
-            ohGroups={data.one_hot_groups || {}} shapeWarning={shapWarnings} />
+            ohGroups={data.one_hot_groups || {}} shapeWarning={shapWarnings} isClustering={isClustering} />
         </ChartCard>
       </div>
 
@@ -1222,7 +1388,7 @@ export default function FeatureSelectionPage({
               <div>
                 <div style={{ fontWeight: 800, fontSize: 16, color: C.text }}>Full Correlation Heatmap</div>
                 <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                  Every numeric feature pair, including the target "{targetCol}".
+                  {isClustering ? 'Every numeric feature pair (no target column in clustering).' : `Every numeric feature pair, including the target "${targetCol}".`}
                 </div>
               </div>
               <button onClick={() => setHeatmapExpanded(false)}

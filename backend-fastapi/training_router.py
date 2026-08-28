@@ -45,16 +45,29 @@ def safe_round(x, nd=4):
     return round(xf, nd)
 
 def suggest_split_ratio(n: int) -> dict:
+    """Split ratio scales with dataset size regardless of which evaluation
+    method ends up recommended below - a user who overrides the K-Fold
+    recommendation and picks Train/Test Split manually on a small dataset
+    should still see a sensible suggested ratio, not a blank one."""
     if n >= 100000: r = (0.90, 0.10)
     elif n >= 50000: r = (0.80, 0.20)
     elif n >= 10000: r = (0.70, 0.30)
     elif n >= 5000:  r = (0.75, 0.25)
     elif n >= 1000:  r = (0.80, 0.20)
     elif n >= 500:   r = (0.85, 0.15)
-    elif n >= 100:   r = (0.90, 0.10)
-    else:            return {"train": None, "test": None, "recommend_cv": True,
-                              "note": "Dataset is very small. Cross-validation is recommended."}
-    return {"train": r[0], "test": r[1], "recommend_cv": False}
+    else:            r = (0.90, 0.10)
+    # A single train/test split on a small dataset gives a noisy, unstable
+    # performance estimate (the test set itself is too small to trust) -
+    # K-Fold CV re-uses every row as both train and test data across folds
+    # and averages the result, which is materially more reliable below
+    # roughly a thousand rows. Reuses the same 1000-row boundary
+    # suggest_k_folds() already draws on (more folds below it too), rather
+    # than a second, unrelated threshold.
+    recommend_cv = n < 1000
+    result = {"train": r[0], "test": r[1], "recommend_cv": recommend_cv}
+    if recommend_cv:
+        result["note"] = "Dataset is small enough that cross-validation gives a more reliable estimate than a single split."
+    return result
 
 def suggest_k_folds(n: int) -> int:
     return 5 if n >= 1000 else 10
@@ -151,6 +164,15 @@ def find_elbow(values: List[float]) -> int:
     diffs2 = np.diff(diffs)
     return int(np.argmin(diffs2)) + 1  # +1 for the double differencing offset
 
+def normalize_to_100(values: List[float]) -> List[float]:
+    """Scale to a 0-100 relative range so two differently-scaled curves
+    (inertia's raw sum-of-squares vs entropy's bits) can share one Y axis."""
+    arr = np.array(values, dtype=float)
+    mn, mx = float(arr.min()), float(arr.max())
+    if mx == mn:
+        return [50.0] * len(values)
+    return ((arr - mn) / (mx - mn) * 100).round(2).tolist()
+
 def tree_to_dict(clf, feature_names: List[str], class_names: List[str], max_depth=5, node=0, depth=0):
     """Recursively convert an sklearn Decision Tree into a JSON-serializable
     dict for the frontend's custom SVG tree renderer. Capped at max_depth for
@@ -186,28 +208,111 @@ def tree_to_dict(clf, feature_names: List[str], class_names: List[str], max_dept
         "right": tree_to_dict(clf, feature_names, class_names, max_depth, tree_.children_right[node], depth + 1),
     }
 
-def compute_cluster_scatter(X: pd.DataFrame, labels, centroids, feature_names):
-    """2D scatter (first 2 numeric columns) + centroid positions in that
-    same 2D projection. Capped at 800 points for payload size, same
-    convention as visualization_router.py's PCA scatter sampling."""
-    cols = list(X.columns[:2]) if X.shape[1] >= 2 else [X.columns[0], X.columns[0]]
+def compute_cluster_scatter(X: pd.DataFrame, X_scaled: pd.DataFrame, labels,
+                            centroids_scaled, centroids_raw, feature_names: List[str]):
+    """Three ways to look at a K-Means clustering that lives in more than 2
+    dimensions at once, all computed here so the frontend needs one request:
+
+    1. "Best features" (the default) — of every feature, the 2 whose cluster
+       centers are most spread apart. Centroid separation is measured on
+       centroids_scaled (the standardized space K-Means actually clustered
+       in), NOT centroids_raw — comparing raw-unit variance would just pick
+       whichever feature happens to have the largest natural numbers (e.g.
+       income in the tens of thousands vs. age in the tens), regardless of
+       which one the clustering actually separated on. Points/centroids
+       plotted are still raw values, for a readable axis.
+    2. "PCA" — project everything onto the top 2 principal components at
+       once (uses every feature simultaneously, not just 2) — a different,
+       complementary answer to "which 2D view shows the clusters best."
+    3. "All pairs" — the full raw feature matrix for the sampled points, so
+       the frontend can build a scatter for ANY pair on demand without a
+       second round trip. A single shared {feature_names, rows} table
+       instead of a per-point named dict — avoids repeating every feature
+       name as a JSON key for all 800 points.
+
+    Row sampling (cap 800, same convention as visualization_router.py's PCA
+    scatter) is shared across all three so the same points appear in each.
+    """
     n = len(X)
     if n > 800:
         idx = np.random.default_rng(42).choice(n, 800, replace=False)
     else:
         idx = np.arange(n)
-    Xr = X.iloc[idx].reset_index(drop=True)
-    labels_r = np.asarray(labels)[idx]
+    Xr        = X.iloc[idx].reset_index(drop=True)
+    Xr_scaled = X_scaled.iloc[idx].reset_index(drop=True)
+    labels_r  = np.asarray(labels)[idx]
+    n_feat    = len(feature_names)
+
+    # ── 1. Best features (top-2 by standardized centroid separation) ──────
+    if n_feat >= 2:
+        spread = {feat: float(np.var(centroids_scaled[:, fi])) for fi, feat in enumerate(feature_names)}
+        ranked = sorted(spread, key=lambda f: spread[f], reverse=True)
+        feat_x, feat_y = ranked[0], ranked[1]
+        weakest = ranked[-1]
+        selection_reason = (
+            f"'{feat_x}' and '{feat_y}' were picked automatically out of {n_feat} features — their "
+            f"cluster centers are the most spread apart on the standardized scale K-Means itself "
+            f"clusters on (spread {spread[feat_x]:.3f} and {spread[feat_y]:.3f}, vs {spread[weakest]:.3f} "
+            f"for the least-separating feature '{weakest}'). These give the clearest 2D picture of how "
+            f"the clustering actually split the data."
+        )
+    else:
+        feat_x = feat_y = feature_names[0]
+        selection_reason = "Only one feature available — plotted against itself."
+    xi, yi = feature_names.index(feat_x), feature_names.index(feat_y)
+
     scatter = [
-        {"x": safe_round(row[cols[0]]), "y": safe_round(row[cols[1]]), "cluster": int(labels_r[i])}
+        {"x": safe_round(row[feat_x]), "y": safe_round(row[feat_y]), "cluster": int(labels_r[i])}
         for i, row in Xr.iterrows()
     ]
-    col_idx = [list(X.columns).index(cols[0]), list(X.columns).index(cols[1])]
     center_list = [
-        {"x": safe_round(c[col_idx[0]]), "y": safe_round(c[col_idx[1]]), "cluster": ci}
-        for ci, c in enumerate(centroids)
+        {"x": safe_round(c[xi]), "y": safe_round(c[yi]), "cluster": ci}
+        for ci, c in enumerate(centroids_raw)
     ]
-    return {"scatter": scatter, "centroids": center_list, "x_label": cols[0], "y_label": cols[1]}
+
+    # ── 2. PCA projection (needs >=2 features; degrades to None otherwise
+    #      or if PCA fails, e.g. a zero-variance feature set) ─────────────
+    pca_block = None
+    if n_feat >= 2:
+        try:
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=2, random_state=42)
+            coords          = pca.fit_transform(Xr_scaled)
+            centroid_coords = pca.transform(centroids_scaled)
+            var_ratio = pca.explained_variance_ratio_
+            pca_block = {
+                "scatter": [
+                    {"x": safe_round(coords[i, 0]), "y": safe_round(coords[i, 1]), "cluster": int(labels_r[i])}
+                    for i in range(len(coords))
+                ],
+                "centroids": [
+                    {"x": safe_round(centroid_coords[ci, 0]), "y": safe_round(centroid_coords[ci, 1]), "cluster": ci}
+                    for ci in range(len(centroid_coords))
+                ],
+                "x_label": f"PC1 ({var_ratio[0] * 100:.1f}% variance)",
+                "y_label": f"PC2 ({var_ratio[1] * 100:.1f}% variance)",
+            }
+        except Exception:
+            pca_block = None
+
+    # ── 3. All-pairs raw data, for the frontend's "explore every pair"
+    #      toggle. Rendering is the frontend's call (it caps how many of
+    #      the n_pairs combinations it actually draws) - this always
+    #      includes the data since it's cheap either way (a few hundred KB
+    #      at most: <=800 rows x feature count).
+    all_pairs = {
+        "feature_names": feature_names,
+        "rows": [[safe_round(v) for v in row] for row in Xr[feature_names].values.tolist()],
+        "cluster": [int(c) for c in labels_r],
+    }
+    n_pairs = n_feat * (n_feat - 1) // 2
+
+    return {
+        "scatter": scatter, "centroids": center_list, "x_label": feat_x, "y_label": feat_y,
+        "selection_reason": selection_reason,
+        "pca": pca_block,
+        "all_pairs": all_pairs, "n_pairs": n_pairs,
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REQUEST MODELS
@@ -358,17 +463,32 @@ def elbow_kmeans(req: ElbowKMeansReq):
         if X_num.shape[1] == 0:
             raise HTTPException(400, "No numeric columns available for clustering.")
 
-        X_sc     = StandardScaler().fit_transform(X_num)
-        max_k    = min(req.max_k, len(X_num) - 1)
-        k_vals   = list(range(2, max(3, max_k + 1)))
-        inertias = []
+        X_sc      = StandardScaler().fit_transform(X_num)
+        max_k     = min(req.max_k, len(X_num) - 1)
+        k_vals    = list(range(2, max(3, max_k + 1)))
+        inertias  = []
+        entropies = []
         for k in k_vals:
             km = KMeans(n_clusters=k, random_state=42, n_init=10, max_iter=100)
             km.fit(X_sc)
             inertias.append(safe_round(km.inertia_) or 0.0)
+            # Shannon entropy (bits) of the cluster-size distribution - how
+            # evenly this k spreads points across its clusters. Distinct
+            # from /train's per-run entropy (natural log, one k only): this
+            # is a full k-by-k curve for the elbow chart, log2 so the
+            # frontend can label it in bits.
+            _, counts = np.unique(km.labels_, return_counts=True)
+            probs = counts / counts.sum()
+            entropy = float(-np.sum(probs * np.log2(probs + 1e-10)))
+            entropies.append(safe_round(entropy, 4) or 0.0)
 
         elbow_idx = find_elbow(inertias)
-        return {"k_values": k_vals, "inertias": inertias, "best_k": k_vals[elbow_idx]}
+        return {
+            "k_values": k_vals, "inertias": inertias, "entropies": entropies,
+            "best_k": k_vals[elbow_idx],
+            "inertia_normalized": normalize_to_100(inertias),
+            "entropy_normalized": normalize_to_100(entropies),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -499,7 +619,8 @@ def train_model(req: TrainReq):
             centroids = sc.inverse_transform(model.cluster_centers_)
             result["n_clusters"]  = int(model.n_clusters)
             result["inertia"]     = safe_round(model.inertia_)
-            result["cluster_viz"] = compute_cluster_scatter(X, labels, centroids, feature_names)
+            result["cluster_viz"] = compute_cluster_scatter(
+                X, X_sc, labels, model.cluster_centers_, centroids, feature_names)
             unique, counts = np.unique(labels, return_counts=True)
             result["cluster_dist"] = [{"cluster": int(k), "count": int(v)} for k, v in zip(unique, counts)]
             proportions = counts / counts.sum()

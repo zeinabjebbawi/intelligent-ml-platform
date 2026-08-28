@@ -21,11 +21,11 @@
  * Creative liberty was only taken where the spec explicitly invited it
  * (chart styling, the exact visual language of each model-specific graph).
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
   ResponsiveContainer, Brush, BarChart, Bar, Cell, ScatterChart,
-  Scatter, ZAxis,
+  Scatter, ZAxis, ComposedChart, Legend,
 } from 'recharts'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
@@ -49,7 +49,49 @@ const callTraining = async (endpoint, body) => {
   return res.json()
 }
 
+// Persists a piece of left-panel state to localStorage under
+// "prism_training_<filePath>__<key>" so navigating away (TopNav) and back
+// doesn't lose the user's configured model/settings/history — this
+// component instance gets torn down and recreated on that round trip
+// (unlike every OTHER journey-map page, which App.jsx keeps mounted; see
+// the top-of-file note). Scoped by `filePath` (the dataset THIS training
+// session is actually running against) - without that scope, a fresh
+// upload of a completely different dataset silently inherited whatever
+// model/elbow-curve/history a PREVIOUS dataset's session had left in
+// localStorage under the same fixed key, showing a KNN elbow curve and
+// model history for a run that never happened on the new data (confirmed
+// live: reported by the user on a first-ever visit to Training right after
+// a brand-new upload). Same file path across a simple "leave and come
+// back" round trip -> state correctly persists; a genuinely different
+// file (new upload, or an upstream step redone into a new version) ->
+// starts clean, exactly as it should. JSON round-trips every value
+// uniformly (strings/numbers/booleans/objects/arrays/null all survive
+// it), so one hook covers every persisted field without a separate
+// raw-string path for the JSON ones.
+const LS_PREFIX = 'prism_training_'
+function usePersisted(scope, key, defaultValue) {
+  const storageKey = `${LS_PREFIX}${scope || 'unscoped'}__${key}`
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      return raw != null ? JSON.parse(raw) : defaultValue
+    } catch { return defaultValue }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify(value)) } catch {}
+  }, [storageKey, value])
+  return [value, setValue]
+}
+
 const CLASS_COLORS = ['#2dd4bf', '#8b5cf6', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899', '#84cc16', '#06b6d4']
+
+// 0-1 ratio -> percentage string, e.g. 0.9867 -> "98.67%". `safe_round()` on
+// the backend can legitimately return null for a NaN/degenerate metric (a
+// class entirely absent from a tiny CV fold, etc.) - null*100 silently
+// coerces to 0 in JS, which would misrepresent an unknown value as a real
+// 0% score, so that case is handled explicitly rather than falling through
+// the multiplication.
+const pct = (v, nd = 2) => (v == null ? '—' : `${(v * 100).toFixed(nd)}%`)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MODEL CATALOG — grouped by task type, matching the user's exact model list.
@@ -126,13 +168,15 @@ const GRID_SEARCH_DEFAULTS = {
                               { name: 'max_depth', label: 'Max depth', values: [3, 5, 10] },
                               { name: 'min_samples_split', label: 'Min samples split', values: [2, 5] }],
   logistic_regression:      [{ name: 'max_iter', label: 'Max iterations', values: [100, 500] },
-                              { name: 'penalty', label: 'Regularization', values: ['l2', 'l1'] }],
-  svm:                      [{ name: 'kernel', label: 'Kernel', values: ['linear', 'rbf'] },
+                              { name: 'penalty', label: 'Regularization', values: ['l2', 'l1'] },
+                              { name: 'solver', label: 'Solver', values: ['lbfgs', 'liblinear'] }],
+  svm:                      [{ name: 'kernel', label: 'Kernel', values: ['linear', 'rbf', 'poly'] },
                               { name: 'C', label: 'C (regularization)', values: [0.1, 1.0, 10.0] },
                               { name: 'gamma', label: 'Gamma (RBF/poly)', values: ['scale', 'auto'] }],
   xgboost:                  [{ name: 'learning_rate', label: 'Learning rate', values: [0.01, 0.1] },
                               { name: 'max_depth', label: 'Max depth', values: [3, 5, 7] },
-                              { name: 'n_estimators', label: 'Number of trees', values: [50, 100] }],
+                              { name: 'n_estimators', label: 'Number of trees', values: [50, 100] },
+                              { name: 'subsample', label: 'Subsample ratio', values: [0.8, 1.0] }],
   naive_bayes:              [],
   linear_regression:        [],
   ridge_regression:         [{ name: 'alpha', label: 'Alpha (regularization)', values: [0.1, 1.0, 10.0] }],
@@ -141,83 +185,240 @@ const GRID_SEARCH_DEFAULTS = {
   kmeans:                   [{ name: 'max_iter', label: 'Max iterations', values: [100, 300] }],
 }
 
+// "Edit Attributes Manually" — the FULL per-model parameter set (unlike
+// GRID_SEARCH_DEFAULTS above, which only holds the small number of values
+// picked as grid-search-worthy defaults). Modeled on Weka's own Generic
+// Object Editor field list per algorithm (IBk/J48/RandomForest/SMO/
+// Logistic/NaiveBayes), translated to this platform's actual sklearn/
+// XGBoost backend: every field here is a real, valid constructor kwarg
+// that build_model() in training_router.py passes straight through.
+// Deliberately dropped: Weka-internal/Java fields with no sklearn
+// equivalent or no meaning here (batchSize, debug, doNotCheckCapabilities,
+// numDecimalPlaces, printClassifiers, seed-as-string, etc.) and boolean
+// toggles this popup's <select> can't safely represent as real booleans
+// (calcOutOfBag, breakTiesRandomly, ...) - "choose wisely, not everything
+// applies" per the same reasoning already used for the model-history menu
+// and Edit Output popup elsewhere on this page.
 const MODEL_PARAM_DEFS = {
   knn: [
     { name: 'n_neighbors', label: 'K (neighbors)', type: 'number', default: 5, min: 1, max: 99 },
     { name: 'metric', label: 'Distance metric', type: 'select', options: ['euclidean', 'manhattan'], default: 'euclidean' },
+    { name: 'weights', label: 'Weighting', type: 'select', options: ['uniform', 'distance'], default: 'uniform' },
+    { name: 'algorithm', label: 'Search algorithm', type: 'select', options: ['auto', 'ball_tree', 'kd_tree', 'brute'], default: 'auto' },
   ],
   decision_tree: [
-    { name: 'criterion', label: 'Criterion', type: 'select', options: ['gini', 'entropy'], default: 'gini' },
+    // Criterion (gini/entropy = CART/ID3) is deliberately NOT duplicated
+    // here - it already has its own dedicated toggle right under the
+    // Model picker when Decision Tree is selected.
     { name: 'max_depth', label: 'Max depth', type: 'number', default: 6, min: 1, max: 50 },
     { name: 'min_samples_split', label: 'Min samples split', type: 'number', default: 2, min: 2 },
+    { name: 'min_samples_leaf', label: 'Min samples leaf', type: 'number', default: 1, min: 1 },
+    { name: 'max_features', label: 'Max features', type: 'select', options: ['sqrt', 'log2'], default: 'sqrt' },
+    { name: 'splitter', label: 'Splitter', type: 'select', options: ['best', 'random'], default: 'best' },
+    { name: 'ccp_alpha', label: 'Pruning (ccp alpha)', type: 'number', default: 0.0, step: 0.001, min: 0 },
+    { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
   random_forest: [
     { name: 'n_estimators', label: 'Number of trees', type: 'number', default: 100, min: 10, max: 1000 },
     { name: 'max_depth', label: 'Max depth', type: 'number', default: 10, min: 1, max: 50 },
     { name: 'min_samples_split', label: 'Min samples split', type: 'number', default: 2, min: 2 },
+    { name: 'min_samples_leaf', label: 'Min samples leaf', type: 'number', default: 1, min: 1 },
+    { name: 'max_features', label: 'Max features', type: 'select', options: ['sqrt', 'log2'], default: 'sqrt' },
+    { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
   logistic_regression: [
     { name: 'max_iter', label: 'Max iterations', type: 'number', default: 1000, min: 100, max: 5000 },
     { name: 'C', label: 'Regularization (C)', type: 'number', default: 1.0, step: 0.1 },
     { name: 'penalty', label: 'Penalty', type: 'select', options: ['l2', 'l1'], default: 'l2' },
+    { name: 'solver', label: 'Solver', type: 'select', options: ['lbfgs', 'liblinear'], default: 'lbfgs' },
+    { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
   svm: [
     { name: 'kernel', label: 'Kernel', type: 'select', options: ['rbf', 'linear', 'poly'], default: 'rbf' },
     { name: 'C', label: 'C (regularization)', type: 'number', default: 1.0, step: 0.1 },
     { name: 'gamma', label: 'Gamma', type: 'select', options: ['scale', 'auto'], default: 'scale' },
+    { name: 'degree', label: 'Degree (poly kernel)', type: 'number', default: 3, min: 1, max: 10 },
+    { name: 'tol', label: 'Tolerance', type: 'number', default: 0.001, step: 0.0001, min: 0 },
+    { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
   xgboost: [
     { name: 'n_estimators', label: 'Estimators', type: 'number', default: 100, min: 10, max: 1000 },
     { name: 'max_depth', label: 'Max depth', type: 'number', default: 6, min: 1, max: 20 },
     { name: 'learning_rate', label: 'Learning rate', type: 'number', default: 0.1, step: 0.01 },
     { name: 'subsample', label: 'Subsample ratio', type: 'number', default: 1.0, step: 0.1, min: 0.1, max: 1.0 },
+    { name: 'colsample_bytree', label: 'Column sample ratio', type: 'number', default: 1.0, step: 0.1, min: 0.1, max: 1.0 },
+    { name: 'gamma', label: 'Min split loss (gamma)', type: 'number', default: 0, step: 0.1, min: 0 },
   ],
-  naive_bayes: [],
+  naive_bayes: [
+    { name: 'var_smoothing', label: 'Variance smoothing', type: 'number', default: 1e-9, step: 1e-9, min: 0 },
+  ],
   linear_regression: [],
-  ridge_regression: [{ name: 'alpha', label: 'Alpha', type: 'number', default: 1.0, step: 0.1 }],
+  ridge_regression: [
+    { name: 'alpha', label: 'Alpha', type: 'number', default: 1.0, step: 0.1 },
+    { name: 'solver', label: 'Solver', type: 'select', options: ['auto', 'svd', 'cholesky'], default: 'auto' },
+    { name: 'max_iter', label: 'Max iterations', type: 'number', default: 1000, min: 100 },
+  ],
   random_forest_regressor: [
     { name: 'n_estimators', label: 'Number of trees', type: 'number', default: 100, min: 10, max: 1000 },
     { name: 'max_depth', label: 'Max depth', type: 'number', default: 10, min: 1, max: 50 },
+    { name: 'min_samples_split', label: 'Min samples split', type: 'number', default: 2, min: 2 },
+    { name: 'min_samples_leaf', label: 'Min samples leaf', type: 'number', default: 1, min: 1 },
+    { name: 'max_features', label: 'Max features', type: 'select', options: ['sqrt', 'log2'], default: 'sqrt' },
+    { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
   kmeans: [
     { name: 'n_clusters', label: 'Number of clusters (K)', type: 'number', default: 3, min: 2, max: 30 },
     { name: 'max_iter', label: 'Max iterations', type: 'number', default: 300, min: 10 },
+    { name: 'n_init', label: 'Number of initializations', type: 'number', default: 10, min: 1, max: 50 },
+    { name: 'algorithm', label: 'Algorithm', type: 'select', options: ['lloyd', 'elkan'], default: 'lloyd' },
     { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INFO ICON — small "ⓘ" popovers, placed at the 5 primary explanation spots
-// the user specified (metric, model, split/CV, grid search, threshold).
+// INFO ICON — small circular "i" popovers, placed at the 5 primary
+// explanation spots the user specified (metric, model, split/CV, grid
+// search, threshold).
+//
+// Two content modes:
+//   - `content` (plain pre-line string) — the original narrow single-column
+//     popover, anchored just right of the icon. Still used by the 3 spots
+//     that are naturally a short paragraph or two (Evaluation Method, Grid
+//     Search CV, Decision Threshold) — unchanged.
+//   - `items` (array of {label, desc}, optionally with `itemsTitle` and a
+//     closing `footer` line) — a wider, multi-column popover for the 2
+//     spots that are really a LIST of many short entries (Model, Focus
+//     Metric): a single narrow column made those tall-and-scrolling with
+//     every line looking the same weight. CSS multi-column layout spreads
+//     them horizontally instead, with the label bold and the description
+//     normal-weight. Positioned via `position:fixed` + the button's real
+//     on-screen rect (measured on open, not guessed) and clamped to the
+//     viewport so it can never render off-screen or get clipped — this is
+//     what actually fixes the Focus Metric card's fixed-offset "always
+//     opens 22px right of the icon" positioning, which is what clipped it
+//     when the icon itself was already more than halfway across the page.
 // ─────────────────────────────────────────────────────────────────────────────
-const InfoIcon = ({ content }) => {
+const WIDE_POPUP_W = 560
+const NARROW_POPUP_W = 300
+
+const InfoIcon = ({ content, items, itemsTitle, footer }) => {
   const { C } = useTheme()
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const popupRef = useRef(null)
+  const isWide = !!items
+  const popupW = isWide ? WIDE_POPUP_W : NARROW_POPUP_W
+
+  // Both popup shapes measure the icon's REAL on-screen position on open and
+  // clamp against the viewport - the narrow (`content`) popup used to be
+  // `position:'absolute', left:22, top:-6` with no clamping at all, which is
+  // exactly why it clipped/forced a page-level horizontal scrollbar whenever
+  // the icon sat anywhere near the left panel's own right edge (Evaluation
+  // Method, Grid Search CV, Decision Threshold all do). Clamping `left`
+  // against a known fixed width is enough on its own, but clamping `top`
+  // needs the popup's actual rendered HEIGHT (content-driven, unknown until
+  // it renders) - a layout effect measures the just-mounted popup via
+  // popupRef and corrects `top` before the browser paints, so there's no
+  // visible flicker and no need to let it clip or scroll internally instead.
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    // Measure the popup's REAL rendered box, not the declared `width`
+    // constant - these divs use default content-box sizing, so padding
+    // and border add on top of `width` (e.g. WIDE_POPUP_W=560 renders at
+    // 602px). Clamping against the constant instead of the true size let
+    // popups clip by exactly that padding+border margin in a tight
+    // viewport - offsetWidth/offsetHeight report the true box regardless.
+    const w = popupRef.current?.offsetWidth || popupW
+    const h = popupRef.current?.offsetHeight || 0
+    const left = Math.max(12, Math.min(r.right + 8, window.innerWidth - w - 12))
+    const top  = Math.max(12, Math.min(r.top - 6, window.innerHeight - h - 12))
+    setPos({ left, top })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   return (
     <span style={{ position: 'relative', display: 'inline-block' }}>
-      <button onClick={() => setOpen(o => !o)} title="Learn more"
+      <button ref={btnRef} onClick={() => setOpen(o => !o)} title="Learn more"
         style={{
-          width: 17, height: 17, borderRadius: '50%', border: `1.5px solid ${C.primary}`,
-          background: open ? C.primary : 'transparent', color: open ? 'white' : C.primary,
-          fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'inline-flex',
-          alignItems: 'center', justifyContent: 'center', marginLeft: 6, flexShrink: 0, padding: 0,
-        }}>ⓘ</button>
+          width: 18, height: 18, border: 'none', background: 'none', padding: 0,
+          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          marginLeft: 6, flexShrink: 0, lineHeight: 1, transition: 'all 0.15s',
+        }}>
+        <svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="7.25" fill={open ? C.primary : C.primarySoft} stroke={C.primary} strokeWidth="1.5" />
+          <circle cx="9" cy="5.7" r="1.05" fill={open ? '#fff' : C.primary} />
+          <rect x="8.15" y="8.1" width="1.7" height="5" rx="0.85" fill={open ? '#fff' : C.primary} />
+        </svg>
+      </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
-          <div style={{
-            position: 'absolute', left: 22, top: -6, zIndex: 999,
-            background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
-            padding: '14px 16px', width: 300, boxShadow: shadow, fontSize: 12,
-            color: C.text, lineHeight: 1.65, whiteSpace: 'pre-line',
-          }}>
-            {content}
-          </div>
+          {isWide ? (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '16px 20px', width: WIDE_POPUP_W, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow,
+              fontSize: 12, color: C.text,
+              // Reset explicitly, don't inherit: this popup is a DOM child of
+              // SectionLabel's own div (`<SectionLabel info={<InfoIcon/>}>`),
+              // which sets fontWeight:800 + textTransform:uppercase for ITS
+              // OWN caption text. Both properties inherit by default, and the
+              // original popup never broke that inheritance - which is the
+              // actual root cause of the "everything renders bold" report,
+              // not a one-off styling miss on the description text alone.
+              fontWeight: 400, textTransform: 'none', letterSpacing: 'normal',
+            }}>
+              {itemsTitle && (
+                <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: 'uppercase',
+                  letterSpacing: 1, marginBottom: 12 }}>{itemsTitle}</div>
+              )}
+              <div style={{ columns: '2 230px', columnGap: 22 }}>
+                {items.map(it => (
+                  <div key={it.label} style={{ breakInside: 'avoid', marginBottom: 13 }}>
+                    <div style={{ fontWeight: 800, fontSize: 12.5, color: C.text, marginBottom: 3 }}>{it.label}</div>
+                    <div style={{ fontWeight: 400, fontSize: 11.5, color: C.muted, lineHeight: 1.55, whiteSpace: 'pre-line' }}>{it.desc}</div>
+                  </div>
+                ))}
+              </div>
+              {footer && (
+                <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px dashed ${C.border}`,
+                  fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: 1.6 }}>{footer}</div>
+              )}
+            </div>
+          ) : (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '14px 16px', width: NARROW_POPUP_W, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow, fontSize: 12,
+              color: C.text, lineHeight: 1.65, whiteSpace: 'pre-line',
+              // Same inheritance reset as the wide popup above - this one is
+              // also a DOM child of SectionLabel's bold-uppercase caption div.
+              fontWeight: 400, textTransform: 'none', letterSpacing: 'normal',
+            }}>
+              {content}
+            </div>
+          )}
         </>
       )}
     </span>
   )
 }
+
+// Pre-selected default (see the `defaults` load effect) is still just the
+// initial state - clicking the other radio switches away from it exactly
+// like any other radio button. This badge is purely informational, marking
+// WHICH option that initial state matches, not a constraint on the choice.
+const RecommendedBadge = ({ C }) => (
+  <span style={{
+    marginLeft: 'auto', flexShrink: 0, fontSize: 9.5, fontWeight: 800,
+    padding: '2px 8px', borderRadius: 20, background: C.successSoft, color: C.success,
+    textTransform: 'uppercase', letterSpacing: 0.4, whiteSpace: 'nowrap',
+  }}>✓ Recommended</span>
+)
 
 const SectionLabel = ({ children, info }) => {
   const { C } = useTheme()
@@ -358,6 +559,103 @@ const ElbowChart = ({ kValues, values, bestK, yLabel, currentK, onPick }) => {
         Click anywhere on the curve to select k · currently k = <strong style={{ color: C.text }}>{currentK}</strong> · drag the strip below to zoom
       </div>
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// K-MEANS ELBOW CHART — inertia AND entropy together, both normalized to a
+// shared 0-100 scale (done server-side in training_router.py's
+// normalize_to_100) so two differently-scaled curves can share one Y axis.
+// Click-to-pick-k, best-k reference line, and zoom Brush all mirror the
+// single-line ElbowChart above; the custom tooltip reads back the RAW
+// (un-normalized) values from elbowData by k, not the normalized ones being
+// plotted, since "58.3 (normalized)" means nothing to the user.
+// ─────────────────────────────────────────────────────────────────────────────
+const KMeansElbowTooltip = ({ active, payload, label, elbowData, C }) => {
+  if (!active || !payload?.length) return null
+  const idx = elbowData.k_values.indexOf(label)
+  const inertiaRaw = idx >= 0 ? elbowData.inertias?.[idx] : null
+  const entropyRaw = idx >= 0 ? elbowData.entropies?.[idx] : null
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px', fontSize: 12 }}>
+      <div style={{ fontWeight: 700, color: C.text, marginBottom: 4 }}>K = {label}</div>
+      {inertiaRaw != null && <div style={{ color: C.warning }}>Inertia: {inertiaRaw.toFixed(2)} (raw)</div>}
+      {entropyRaw != null && <div style={{ color: C.primary }}>Entropy: {entropyRaw.toFixed(4)} bits</div>}
+    </div>
+  )
+}
+
+const KMeansElbowChart = ({ elbowData, currentK, onPick, C }) => {
+  const data = elbowData.k_values.map((k, i) => ({
+    k, inertia_norm: elbowData.inertia_normalized?.[i], entropy_norm: elbowData.entropy_normalized?.[i],
+  }))
+
+  const handleClick = (e) => {
+    if (!e || !e.activeLabel) return
+    const clickedK = Number(e.activeLabel)
+    const nearest = elbowData.k_values.reduce((best, k) => Math.abs(k - clickedK) < Math.abs(best - clickedK) ? k : best, elbowData.k_values[0])
+    onPick(nearest)
+  }
+
+  return (
+    <div>
+      <ResponsiveContainer width="100%" height={340}>
+        <ComposedChart data={data} onClick={handleClick} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}
+          style={{ cursor: 'pointer' }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
+          <XAxis dataKey="k" type="number" domain={['dataMin', 'dataMax']}
+            tick={{ fontSize: 11, fill: C.muted }} label={{ value: 'Number of Clusters (K)', position: 'insideBottom', offset: -2, fontSize: 11 }} />
+          <YAxis tick={{ fontSize: 11, fill: C.muted }}
+            label={{ value: 'Score Magnitude (Relative Scale)', angle: -90, position: 'insideLeft', fontSize: 11 }} />
+          <Tooltip content={<KMeansElbowTooltip elbowData={elbowData} C={C} />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          {elbowData.best_k != null && (
+            <ReferenceLine x={elbowData.best_k} stroke={C.muted} strokeDasharray="6,4"
+              label={{ value: `Optimal Elbow Point (K=${elbowData.best_k})`, position: 'insideTopRight', fill: C.muted, fontSize: 10 }} />
+          )}
+          <Line type="monotone" dataKey="inertia_norm" name="Inertia" stroke={C.warning} strokeWidth={2.5} dot={{ r: 4 }} isAnimationActive={false} />
+          <Line type="monotone" dataKey="entropy_norm" name="Entropy" stroke={C.primary} strokeWidth={2.5} dot={{ r: 4 }} isAnimationActive={false} />
+          <Brush dataKey="k" height={22} stroke={C.primary} fill={C.faint} travellerWidth={8} />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div style={{ fontSize: 11.5, color: C.muted, textAlign: 'center', marginTop: 2 }}>
+        Click anywhere on the curve to select k · currently k = <strong style={{ color: C.text }}>{currentK}</strong> · drag the strip below to zoom
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ELBOW EXPLANATION CARD — what inertia/entropy mean and how to read the
+// chart above together, K-Means only. Same "uppercase label + dashed
+// section divider" convention as FeatureImportance.jsx's DescriptionCard.
+// ─────────────────────────────────────────────────────────────────────────────
+const ElbowExplanationCard = ({ C }) => {
+  const Section = ({ label, color, text }) => (
+    <div>
+      <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, color, marginBottom: 5 }}>{label}</div>
+      <p style={{ fontSize: 12.5, color: C.text, lineHeight: 1.7, margin: 0 }}>{text}</p>
+    </div>
+  )
+  return (
+    <ChartCard title="Understanding the Elbow Chart">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Section label="What is Inertia?" color={C.warning} text={
+          `Inertia (also called Within-Cluster Sum of Squares, WCSS) measures the total distance between every data point and its assigned cluster center. A low inertia means points are tightly packed around their cluster centers — the clusters are compact and internally consistent. As you increase K, inertia always decreases: with more clusters, each cluster is smaller and tighter. The key is finding where inertia stops dropping sharply — where adding one more cluster gives you very little extra compactness. That point of diminishing returns is the elbow.`
+        } />
+        <div style={{ paddingTop: 14, borderTop: `1px dashed ${C.border}` }}>
+          <Section label="What is Entropy?" color={C.primary} text={
+            `Shannon Entropy measures how evenly your data points are distributed across the K clusters. An entropy of 0 means all points landed in one cluster (perfectly uneven — useless). Maximum entropy means every cluster has exactly the same number of points (perfectly even distribution). For a good clustering, you want high entropy — no cluster should be nearly empty while another is enormous. As K increases, entropy generally increases because the algorithm has more buckets to spread points across. When entropy starts to flatten, splitting into more clusters is no longer creating meaningfully different groups — it is just subdividing existing ones.`
+          } />
+        </div>
+        <div style={{ paddingTop: 14, borderTop: `1px dashed ${C.border}` }}>
+          <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, color: C.success, marginBottom: 5 }}>What To Look For</div>
+          <p style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.7, margin: 0 }}>
+            The optimal K is where BOTH curves change behavior simultaneously: inertia stops dropping steeply (the "elbow" bends) AND entropy starts flattening (adding more clusters no longer improves distribution). When these two signals agree, you have strong evidence for that K value. If they disagree — for example, inertia says K=3 but entropy keeps rising until K=5 — the data may have ambiguous cluster structure, and you should try both values and compare the resulting cluster scatter plots.
+          </p>
+        </div>
+      </div>
+    </ChartCard>
   )
 }
 
@@ -624,52 +922,200 @@ const BayesNetworkViz = ({ network }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // CLUSTERING VIZ — scatter with centroids, cluster size histogram, entropy.
 // ─────────────────────────────────────────────────────────────────────────────
+// Small pill tabs for the Cluster Map's "Best Features" / "PCA" toggle —
+// same active/inactive visual language as radioRowStyle/smallBtnStyle
+// elsewhere on this page, just compact enough to sit in a ChartCard header.
+const ViewTabBtn = ({ active, onClick, children, C }) => (
+  <button onClick={onClick} style={{
+    padding: '4px 11px', borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+    border: `1px solid ${active ? C.primary : C.border}`,
+    background: active ? C.primarySoft : C.card, color: active ? C.primary : C.muted,
+  }}>{children}</button>
+)
+
+// One scatter, reused for both the "Best Features" and "PCA" views — they
+// differ only in which 2D projection (viz vs viz.pca) feeds x/y/centroids.
+const ClusterScatter2D = ({ scatter, centroids, xLabel, yLabel, C }) => {
+  const byCluster = {}
+  scatter.forEach(p => { (byCluster[p.cluster] ??= []).push(p) })
+  return (
+    <ResponsiveContainer width="100%" height={340}>
+      <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
+        <XAxis dataKey="x" type="number" name={xLabel} tick={{ fontSize: 10, fill: C.muted }} />
+        <YAxis dataKey="y" type="number" name={yLabel} tick={{ fontSize: 10, fill: C.muted }} />
+        <ZAxis range={[16, 16]} />
+        <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+        {Object.entries(byCluster).map(([cl, pts]) => (
+          <Scatter key={cl} name={`Cluster ${cl}`} data={pts} fill={CLASS_COLORS[cl % CLASS_COLORS.length]} opacity={0.55} />
+        ))}
+        <Scatter name="Centroids" data={centroids} shape="star" fill="none" legendType="none">
+          {centroids.map((c, i) => (
+            <Cell key={i} fill={CLASS_COLORS[c.cluster % CLASS_COLORS.length]} stroke={C.text} strokeWidth={1.5} />
+          ))}
+        </Scatter>
+      </ScatterChart>
+    </ResponsiveContainer>
+  )
+}
+
+// Grid of small unlabeled-axis scatters, one per feature pair — only ever
+// mounted while AllPairsSection's toggle is expanded, so an unopened
+// toggle costs nothing. No Tooltip/animation per mini-chart:
+// with dozens of these on screen at once, both are pure overhead a tiny
+// 120px chart can't usefully show anyway.
+const AllPairsGrid = ({ allPairs, C }) => {
+  const { feature_names: feats, rows, cluster } = allPairs
+  const pairs = useMemo(() => {
+    const out = []
+    for (let i = 0; i < feats.length; i++)
+      for (let j = i + 1; j < feats.length; j++)
+        out.push({ fx: feats[i], fy: feats[j], xi: i, yi: j })
+    return out
+  }, [feats])
+  const clusterIds = useMemo(() => [...new Set(cluster)].sort((a, b) => a - b), [cluster])
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+      {pairs.map(({ fx, fy, xi, yi }) => {
+        const data = rows.map((r, i) => ({ x: r[xi], y: r[yi], cluster: cluster[i] }))
+        return (
+          <div key={`${fx}||${fy}`} style={{ background: C.faint, borderRadius: 10, padding: '8px 10px' }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, marginBottom: 4,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fx} × {fy}</div>
+            <ResponsiveContainer width="100%" height={120}>
+              <ScatterChart margin={{ top: 4, right: 4, bottom: 2, left: -22 }}>
+                <XAxis dataKey="x" type="number" tick={{ fontSize: 8, fill: C.muted }} height={14} />
+                <YAxis dataKey="y" type="number" tick={{ fontSize: 8, fill: C.muted }} width={26} />
+                {clusterIds.map(cl => (
+                  <Scatter key={cl} data={data.filter(p => p.cluster === cl)}
+                    fill={CLASS_COLORS[cl % CLASS_COLORS.length]} opacity={0.6} isAnimationActive={false} />
+                ))}
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Above this, a scatter can only ever show 105 tiny multiples at once (15
+// features) before it stops being something a person can actually scan -
+// past that it's not a performance decision, it's a legibility one.
+const MAX_RENDERED_PAIRS = 105
+
 const ClusterScatterChart = ({ viz }) => {
   const { C } = useTheme()
+  const [view, setView] = useState('top2')       // 'top2' | 'pca'
   if (!viz?.scatter) return null
-  const byCluster = {}
-  viz.scatter.forEach(p => { (byCluster[p.cluster] ??= []).push(p) })
+
+  const usingPca = view === 'pca' && viz.pca
+  const active = usingPca ? viz.pca : viz
+
   return (
-    <ChartCard title="Cluster Map" sub={`${viz.x_label} vs. ${viz.y_label} — ✦ marks each cluster's centroid.`}>
-      <ResponsiveContainer width="100%" height={340}>
-        <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
-          <XAxis dataKey="x" type="number" name={viz.x_label} tick={{ fontSize: 10, fill: C.muted }} />
-          <YAxis dataKey="y" type="number" name={viz.y_label} tick={{ fontSize: 10, fill: C.muted }} />
-          <ZAxis range={[16, 16]} />
-          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-          {Object.entries(byCluster).map(([cl, pts]) => (
-            <Scatter key={cl} name={`Cluster ${cl}`} data={pts} fill={CLASS_COLORS[cl % CLASS_COLORS.length]} opacity={0.55} />
-          ))}
-          <Scatter name="Centroids" data={viz.centroids} shape="star"
-            fill="none" legendType="none">
-            {viz.centroids.map((c, i) => (
-              <Cell key={i} fill={CLASS_COLORS[c.cluster % CLASS_COLORS.length]} stroke={C.text} strokeWidth={1.5} />
-            ))}
-          </Scatter>
-        </ScatterChart>
-      </ResponsiveContainer>
+    <ChartCard title="Cluster Map"
+      sub={usingPca
+        ? `Every feature projected onto its 2 directions of maximum variance at once (${active.x_label}, ${active.y_label}) — a different, complementary view from "Best Features".`
+        : viz.selection_reason}
+      action={viz.pca && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <ViewTabBtn C={C} active={!usingPca} onClick={() => setView('top2')}>Best Features</ViewTabBtn>
+          <ViewTabBtn C={C} active={usingPca} onClick={() => setView('pca')}>PCA View</ViewTabBtn>
+        </div>
+      )}>
+      <ClusterScatter2D scatter={active.scatter} centroids={active.centroids}
+        xLabel={active.x_label} yLabel={active.y_label} C={C} />
+      <div style={{ fontSize: 10.5, color: C.muted, textAlign: 'center', marginTop: 2 }}>
+        ✦ marks each cluster's centroid.
+      </div>
     </ChartCard>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// METRIC CARD — matches the left-border-accent style established in
-// DataReadiness.jsx (explicit prior feedback: no plain bordered boxes).
+// ALL FEATURE PAIRS — full-width section (not squeezed into the Cluster
+// Map's 1.4fr grid column, and not a dropdown/accordion): a standard
+// secondary button toggles a regular, always-mounted ChartCard below it
+// (display:none when closed, same as every other chart card when open) —
+// its own internally-scrollable grid of mini scatters, not the page itself,
+// grows for a large feature count.
 // ─────────────────────────────────────────────────────────────────────────────
-const MetricCard = ({ label, value, sub, accent }) => {
+const AllPairsSection = ({ viz }) => {
+  const { C } = useTheme()
+  const [showAllPairs, setShowAllPairs] = useState(false)
+  const featCount = viz?.all_pairs?.feature_names?.length || 0
+  if (featCount <= 2) return null
+  const nPairs = viz.n_pairs || 0
+  const pairsTooMany = nPairs > MAX_RENDERED_PAIRS
+
+  return (
+    <>
+      <button onClick={() => setShowAllPairs(p => !p)} style={{ ...smallBtnStyle(C, false), alignSelf: 'flex-start' }}>
+        {showAllPairs ? '✕ Hide Feature Pair Scatters' : `📊 Show All Feature Pair Scatters (${nPairs} plots)`}
+      </button>
+
+      <ChartCard style={{ display: showAllPairs ? 'block' : 'none' }}
+        title="All Feature Pair Combinations"
+        sub="Scroll to explore every 2-feature view of cluster structure.">
+        {pairsTooMany ? (
+          <div style={{ fontSize: 12, color: C.muted, textAlign: 'center', padding: '20px 10px' }}>
+            This dataset has {featCount} features → {nPairs} possible pairs, too many to render
+            individually and still be readable. Narrow the feature set on Feature Selection first,
+            or use the PCA view above for a single all-features summary.
+          </div>
+        ) : showAllPairs ? (
+          <div style={{ maxHeight: 480, overflowY: 'auto' }}>
+            <AllPairsGrid allPairs={viz.all_pairs} C={C} />
+          </div>
+        ) : null}
+      </ChartCard>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// METRIC CARD — v2. The blurred decorative circle carried no information
+// (same size/opacity regardless of the metric's actual value); replaced
+// with a ring that actually fills to the metric's own ratio when one is
+// available (`ratio`, the raw 0-1 number — accuracy/F1/precision/recall).
+// Top accent border matches the KPICard convention already established in
+// Sampling.jsx rather than this page's old left-border strip. `ratio` is
+// left unset for cards with no natural 0-1 reading (cluster count,
+// inertia, MAE/RMSE/MSE, training time) — the ring simply doesn't render.
+// ─────────────────────────────────────────────────────────────────────────────
+const MetricRing = ({ ratio, color, C, size = 46 }) => {
+  const stroke = 4.5
+  const r = (size - stroke) / 2
+  const circ = 2 * Math.PI * r
+  const clamped = Math.max(0, Math.min(1, ratio))
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0, transform: 'rotate(-90deg)' }}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={C.faint} strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+        strokeDasharray={circ} strokeDashoffset={circ * (1 - clamped)} strokeLinecap="round" />
+    </svg>
+  )
+}
+
+const MetricCard = ({ label, value, sub, accent, icon, ratio }) => {
   const { C } = useTheme()
   const ac = accent || C.primary
   return (
     <div style={{
-      background: C.card, borderRadius: cardR, padding: '16px 18px', position: 'relative',
-      overflow: 'hidden', boxShadow: '0 2px 10px rgba(0,0,0,0.05), 0 0 0 1px rgba(0,0,0,0.03)',
-      borderLeft: `4px solid ${ac}`,
+      background: C.card, borderRadius: cardR, padding: '14px 16px',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.05), 0 0 0 1px rgba(0,0,0,0.03)',
+      borderTop: `3px solid ${ac}`, display: 'flex', alignItems: 'center', gap: 12,
     }}>
-      <div style={{ position: 'absolute', top: -26, right: -26, width: 70, height: 70, borderRadius: '50%', background: `${ac}12` }} />
-      <div style={{ fontSize: 9.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: C.muted, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 900, color: C.text, lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sub}</div>}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
+          {icon && <span style={{ fontSize: 12.5 }}>{icon}</span>}
+          <span style={{ fontSize: 9.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: C.muted }}>{label}</span>
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 900, color: C.text, lineHeight: 1 }}>{value}</div>
+        {sub && <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sub}</div>}
+      </div>
+      {ratio != null && <MetricRing ratio={ratio} color={ac} C={C} />}
     </div>
   )
 }
@@ -825,32 +1271,35 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   const taskType = projectData?.taskType === 'regression' ? 'regression'
     : projectData?.taskType === 'clustering' ? 'clustering' : 'classification'
 
-  // ── Settings state (persists for the page's lifetime) ──────────────────
-  const [selectedModel, setSelectedModel] = useState('')
+  // ── Settings state — persisted to localStorage (see usePersisted above)
+  // so it survives navigating away via TopNav and back, on top of already
+  // persisting for the page's lifetime while mounted. Scoped by `filePath`
+  // so a different dataset never inherits a previous one's state. ────────
+  const [selectedModel, setSelectedModel] = usePersisted(filePath, 'model', '')
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
-  const [selectedMetric, setSelectedMetric] = useState('accuracy')
+  const [selectedMetric, setSelectedMetric] = usePersisted(filePath, 'metric', 'accuracy')
   const [metricDropdownOpen, setMetricDropdownOpen] = useState(false)
   const [treeCriterion, setTreeCriterion] = useState('gini')
 
-  const [kValue, setKValue] = useState(null)
-  const [elbowData, setElbowData] = useState(null)
+  const [kValue, setKValue] = usePersisted(filePath, 'k_value', null)
+  const [elbowData, setElbowData] = usePersisted(filePath, 'elbow_data', null)
   const [elbowLoading, setElbowLoading] = useState(false)
 
-  const [splitMethod, setSplitMethod] = useState('train_test')
-  const [splitRatio, setSplitRatio] = useState(0.8)
-  const [cvFolds, setCvFolds] = useState(5)
-  const [stratified, setStratified] = useState(true)
+  const [splitMethod, setSplitMethod] = usePersisted(filePath, 'split_method', 'train_test')
+  const [splitRatio, setSplitRatio] = usePersisted(filePath, 'split_ratio', 0.8)
+  const [cvFolds, setCvFolds] = usePersisted(filePath, 'cv_folds', 5)
+  const [stratified, setStratified] = usePersisted(filePath, 'stratified', true)
 
-  const [gridSearchEnabled, setGridSearchEnabled] = useState(false)
-  const [gridParams, setGridParams] = useState([])
+  const [gridSearchEnabled, setGridSearchEnabled] = usePersisted(filePath, 'grid_enabled', false)
+  const [gridParams, setGridParams] = usePersisted(filePath, 'grid_params', [])
   const [gridSearchResult, setGridSearchResult] = useState(null)
   const [gridSearchLoading, setGridSearchLoading] = useState(false)
   const [gridError, setGridError] = useState('')
 
-  const [modelParams, setModelParams] = useState({})
+  const [modelParams, setModelParams] = usePersisted(filePath, 'model_params', {})
   const [showEditParams, setShowEditParams] = useState(false)
 
-  const [threshold, setThreshold] = useState(0.5)
+  const [threshold, setThreshold] = usePersisted(filePath, 'threshold', 0.5)
 
   const [trainingLoading, setTrainingLoading] = useState(false)
   const [trainingError, setTrainingError] = useState('')
@@ -860,8 +1309,30 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   })
   const [showEditOutput, setShowEditOutput] = useState(false)
 
-  const [modelHistory, setModelHistory] = useState([])
-  const [activeResult, setActiveResult] = useState(null)
+  const [modelHistory, setModelHistory] = usePersisted(filePath, 'history', [])
+  // Persisted for classification/regression - coming back to this page (in
+  // the same back-and-forth-navigation sense as everything else above)
+  // should show exactly the last output that was on screen, per explicit
+  // request. Clustering is the deliberate exception: it always defaults to
+  // the elbow/K graph instead, regardless of any restored result - handled
+  // right below, once taskType is known, rather than by not persisting at
+  // all (past results still need to stay reachable and restorable there
+  // too via clicking a Model History entry, same as the other task types).
+  const [activeResult, setActiveResult] = usePersisted(filePath, 'active_result', null)
+  // Mount-only (empty deps), NOT a plain "if clustering && truthy" check on
+  // every render: handleTrain's own setActiveResult(result) after a real
+  // training run also makes activeResult truthy, and a per-render guard
+  // fired on THAT too, silently wiping out a just-trained clustering result
+  // a moment after it appeared (confirmed live - the /training/train call
+  // succeeded but the Cluster Map never rendered). useLayoutEffect with []
+  // runs exactly once, before the browser paints (so a stale RESTORED
+  // result never flashes on screen either), and never runs again for the
+  // rest of this mount - so it only ever clears what was restored from
+  // localStorage on load, never a fresh in-session result.
+  useLayoutEffect(() => {
+    if (taskType === 'clustering') setActiveResult(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [historyMenuOpen, setHistoryMenuOpen] = useState(null)
   const [treePopupEntry, setTreePopupEntry] = useState(null)
 
@@ -881,15 +1352,23 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   }, [filePath, targetColumn])
 
   // ── Elbow curve on model selection (KNN / K-Means) ──────────────────────
+  // Skips the network round-trip when elbowData is already populated for
+  // this model (restored from localStorage on mount, e.g. after leaving
+  // and returning to this page) - the `else` branch below always clears
+  // elbowData the moment selectedModel stops being knn/kmeans, so by the
+  // time the user re-selects either one during a live session it's
+  // guaranteed null again and this still refetches normally.
   useEffect(() => {
     if (!filePath) return
     if (selectedModel === 'knn') {
+      if (elbowData) return
       setElbowLoading(true); setElbowData(null)
       callTraining('elbow-knn', { file_path: filePath, target_column: targetColumn, metric: selectedMetric })
         .then(d => { setElbowData(d); setKValue(d.best_k) })
         .catch(e => setTrainingError(e.message))
         .finally(() => setElbowLoading(false))
     } else if (selectedModel === 'kmeans') {
+      if (elbowData) return
       setElbowLoading(true); setElbowData(null)
       callTraining('elbow-kmeans', { file_path: filePath, max_k: 15 })
         .then(d => { setElbowData(d); setKValue(d.best_k) })
@@ -898,6 +1377,7 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
     } else {
       setElbowData(null); setKValue(null)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedModel, filePath])
 
   // Re-run KNN elbow when the metric focus changes (Y-axis depends on it)
@@ -910,7 +1390,13 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   }, [selectedMetric])
 
   // ── Grid search parameter cards reset when model changes ───────────────
+  // Skipped on mount: selectedModel/gridParams/modelParams are all restored
+  // together from localStorage, and this effect firing on that first render
+  // would immediately stomp the restored gridParams/modelParams back to
+  // fresh defaults before the user ever sees them.
+  const didMountModelEffect = useRef(false)
   useEffect(() => {
+    if (!didMountModelEffect.current) { didMountModelEffect.current = true; return }
     setGridParams((GRID_SEARCH_DEFAULTS[selectedModel] || []).map(p => ({ ...p, best: null })))
     setGridSearchResult(null)
     setModelParams({})
@@ -999,7 +1485,7 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   if (!filePath) {
     return (
       <div style={{ background: C.bg, minHeight: '100vh' }}>
-        <TopNav active={active || 'training'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+        <TopNav active={active || 'training'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={taskType} />
         <div style={{ textAlign: 'center', padding: '80px 0', color: C.muted }}>
           No dataset found. Complete the earlier pipeline steps first.
         </div>
@@ -1008,28 +1494,37 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   }
 
   return (
-    <div style={{ background: C.bg, minHeight: '100vh' }}>
-      <TopNav active={active || 'training'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+    <div style={{ background: C.bg, height: '100vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <TopNav active={active || 'training'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={taskType} />
       <VersionsBar versions={versions} />
 
-      <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '18px 32px' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 900, color: C.text, marginBottom: 3 }}>Train and Test</h1>
-        <p style={{ fontSize: 12.5, color: C.muted }}>Configure your model, evaluate performance, and inspect every result.</p>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+      {/* No page title/description bar here on purpose (removed per explicit
+          request — it cost vertical space the page can't spare once nothing
+          scrolls at the page level). This row fills whatever height TopNav +
+          VersionsBar didn't use (`flex:1, minHeight:0` — the minHeight:0 is
+          the actual fix: without it a flex child won't shrink below its
+          content size, which silently defeats the panels' own
+          height:100%+overflowY:auto below and page-level scroll comes right
+          back). Both panels below get their scroll from THIS row's real,
+          computed height, not a guessed pixel offset from the viewport. */}
+      <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
 
         {/* ══════════════════ LEFT PANEL — settings ══════════════════ */}
+        {/* No scroll on this outer panel by design — everything above Model
+            History (model/metric, split, grid search, threshold, train
+            button) must always stay fully visible without scrolling; only
+            the Model History list below scrolls internally once it grows
+            past its own cap. See that section's own comment. */}
         <div style={{
           width: '34%', minWidth: 340, maxWidth: 460, flexShrink: 0,
-          position: 'sticky', top: 0, height: '100vh', overflowY: 'auto',
+          minHeight: 0, display: 'flex', flexDirection: 'column',
           borderRight: `1px solid ${C.border}`, padding: '20px 20px 40px', background: C.card,
         }}>
           {/* Model + Metric row */}
           <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
             <div style={{ flex: 1.2, position: 'relative' }}>
-              <SectionLabel info={<InfoIcon content={
-                Object.entries(MODEL_DESCRIPTIONS).map(([id, d]) => `${modelLabel(id)} — ${d}`).join('\n\n')
+              <SectionLabel info={<InfoIcon itemsTitle="Model Types" items={
+                Object.entries(MODEL_DESCRIPTIONS).map(([id, d]) => ({ label: modelLabel(id), desc: d }))
               } />}>Model</SectionLabel>
               <button onClick={() => { setModelDropdownOpen(o => !o); setMetricDropdownOpen(false) }}
                 style={dropdownBtnStyle(C)}>
@@ -1061,10 +1556,9 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
 
             {taskType !== 'clustering' && (
               <div style={{ flex: 1, position: 'relative' }}>
-                <SectionLabel info={<InfoIcon content={
-                  Object.values(METRIC_INFO).map(m => `${m.label} — ${m.desc}`).join('\n\n') +
-                  '\n\nRule of thumb:\n• Medical / fraud / safety → Recall\n• Marketing / outreach → Precision\n• General purpose → Accuracy or F1'
-                } />}>Focus Metric</SectionLabel>
+                <SectionLabel info={<InfoIcon itemsTitle="Focus Metrics" items={
+                  Object.values(METRIC_INFO).map(m => ({ label: m.label, desc: m.desc }))
+                } footer="Rule of thumb — Medical / fraud / safety → Recall · Marketing / outreach → Precision · General purpose → Accuracy or F1" />}>Focus Metric</SectionLabel>
                 <button onClick={() => { setMetricDropdownOpen(o => !o); setModelDropdownOpen(false) }}
                   style={dropdownBtnStyle(C)}>
                   <span>{currentMetricInfo.label}</span><span>▾</span>
@@ -1097,16 +1591,16 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           {/* Split method */}
           {taskType !== 'clustering' && (
             <div style={{ marginBottom: 16 }}>
-              <SectionLabel info={<InfoIcon content={
-                'Train/Test Split:\n• Splits your data once — e.g. 80% to train, 20% to test.\n• Fast; best for larger datasets (1,000+ rows).\n\n' +
-                'K-Fold Cross-Validation:\n• Splits data k times; each fold is used as the test set once.\n• Scores are averaged — a more reliable estimate.\n• Higher computation cost; best for smaller datasets.\n\n' +
-                'Stratified vs Not Stratified:\n• Stratified keeps each fold\'s class ratio matching the full dataset — recommended for classification.\n• Not Stratified splits purely randomly.\n\n' +
-                'PRISM auto-suggests split/k from your dataset size.'
-              } />}>Evaluation Method</SectionLabel>
+              <SectionLabel info={<InfoIcon itemsTitle="Evaluation Method" footer="PRISM auto-suggests a split ratio / k from your dataset size." items={[
+                { label: 'Train / Test Split', desc: 'Splits your data once — e.g. 80% to train, 20% to test.\nFast; best for larger datasets (1,000+ rows).' },
+                { label: 'K-Fold Cross-Validation', desc: 'Splits data k times; each fold is used as the test set once.\nScores are averaged — a more reliable estimate.\nHigher computation cost; best for smaller datasets.' },
+                { label: 'Stratified vs Not Stratified', desc: 'Stratified keeps each fold\'s class ratio matching the full dataset — recommended for classification.\nNot Stratified splits purely randomly.' },
+              ]} />}>Evaluation Method</SectionLabel>
 
               <label style={radioRowStyle(C, splitMethod === 'train_test')}>
                 <input type="radio" checked={splitMethod === 'train_test'} onChange={() => setSplitMethod('train_test')} />
                 <span style={{ fontWeight: 700, fontSize: 13 }}>Train / Test Split</span>
+                {defaults && !defaults.split_ratio?.recommend_cv && <RecommendedBadge C={C} />}
               </label>
               {splitMethod === 'train_test' && (
                 <div style={{ padding: '8px 4px 4px 26px' }}>
@@ -1116,8 +1610,12 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                     Train {Math.round(splitRatio * 100)}% · Test {Math.round((1 - splitRatio) * 100)}%
                   </div>
                   {defaults?.split_ratio?.train && (
-                    <div style={{ fontSize: 10.5, color: C.muted }}>
-                      Suggested for {defaults.row_count.toLocaleString()} rows: {Math.round(defaults.split_ratio.train * 100)}% / {Math.round(defaults.split_ratio.test * 100)}%
+                    <div style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 5,
+                      padding: '3px 9px', borderRadius: 20, fontSize: 10.5, fontWeight: 700,
+                      background: C.primarySoft, color: C.primary,
+                    }}>
+                      💡 Suggested for {defaults.row_count.toLocaleString()} rows: {Math.round(defaults.split_ratio.train * 100)}% / {Math.round(defaults.split_ratio.test * 100)}%
                     </div>
                   )}
                 </div>
@@ -1126,6 +1624,7 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
               <label style={{ ...radioRowStyle(C, splitMethod === 'cross_validation'), marginTop: 6 }}>
                 <input type="radio" checked={splitMethod === 'cross_validation'} onChange={() => setSplitMethod('cross_validation')} />
                 <span style={{ fontWeight: 700, fontSize: 13 }}>K-Fold Cross-Validation</span>
+                {defaults?.split_ratio?.recommend_cv && <RecommendedBadge C={C} />}
               </label>
               {splitMethod === 'cross_validation' && (
                 <div style={{ padding: '8px 4px 4px 26px', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1148,17 +1647,27 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           {taskType !== 'clustering' && (
             <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <SectionLabel info={<InfoIcon content={
-                  'Grid Search CV — what it does:\n\nSystematically tests every combination of the parameter values you specify, scoring each with cross-validation, and returns the best-performing combination on your chosen metric.\n\n' +
-                  'Optional but often worthwhile — commonly a 2-5% accuracy gain on typical datasets.\n\n' +
-                  'Limited to a small number of values per parameter here to keep search time reasonable.\n\n' +
-                  'Process: 1) parameter cards are pre-filled with sensible defaults  2) click Search  3) best values appear beside each card  4) click Apply to load them into your model settings.'
-                } />}>Grid Search CV</SectionLabel>
+                <SectionLabel info={<InfoIcon itemsTitle="Grid Search CV" items={[
+                  { label: 'What It Does', desc: 'Systematically tests every combination of the parameter values you specify, scoring each with cross-validation, and returns the best-performing combination on your chosen metric.' },
+                  { label: 'Why Use It', desc: 'Optional but often worthwhile — commonly a 2-5% accuracy gain on typical datasets.' },
+                  { label: 'Limitation', desc: 'Limited to a small number of values per parameter here to keep search time reasonable.' },
+                  { label: 'Process', desc: '1) Parameter cards are pre-filled with sensible defaults.\n2) Click Search.\n3) Best values appear beside each card.\n4) Click Apply to load them into your model settings.' },
+                ]} />}>Grid Search CV</SectionLabel>
                 <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
                   <span style={{ position: 'relative', width: 34, height: 19, display: 'inline-block' }}>
                     <input type="checkbox" checked={gridSearchEnabled} onChange={e => setGridSearchEnabled(e.target.checked)}
                       style={{ opacity: 0, width: 0, height: 0 }} />
-                    <span onClick={() => setGridSearchEnabled(v => !v)} style={{
+                    {/* No onClick here on purpose: this span sits inside the
+                        <label> that wraps the real checkbox, so a click on
+                        it ALSO triggers the browser's native label->checkbox
+                        forwarding (a real, separate click dispatched on the
+                        input right after this one). Two toggle paths on one
+                        click reliably canceled each other out - confirmed
+                        live, `checked` never left `false` no matter how many
+                        times it was clicked. The input's onChange above is
+                        now the only source of truth; this span is purely
+                        visual and reads gridSearchEnabled to render. */}
+                    <span style={{
                       position: 'absolute', inset: 0, borderRadius: 20, cursor: 'pointer',
                       background: gridSearchEnabled ? C.primary : C.border, transition: 'background 0.15s',
                     }}>
@@ -1173,27 +1682,30 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
 
               {gridSearchEnabled && (
                 <div style={{ marginBottom: 10 }}>
-                  {gridParams.map((p, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
-                      padding: '7px 9px', background: C.faint, borderRadius: 8 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* Small cards side-by-side (2 per row in the left panel's
+                      own width), not stacked full-width rows - matches the
+                      user's own mockup and keeps this section from eating
+                      the vertical space the no-scroll left panel can't spare. */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(118px, 1fr))', gap: 5, marginBottom: 6 }}>
+                    {gridParams.map((p, i) => (
+                      <div key={i} style={{ position: 'relative', padding: '6px 18px 6px 7px', background: C.faint, borderRadius: 7 }}>
+                        <button onClick={() => removeGridParam(i)} title="Remove"
+                          style={{ position: 'absolute', top: 3, right: 4, border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: 0 }}>✕</button>
                         {p.custom ? (
                           <input placeholder="param name" value={p.name} onChange={e => updateGridParam(i, { name: e.target.value })}
-                            style={{ width: '100%', fontSize: 11.5, border: 'none', background: 'transparent', color: C.text, fontWeight: 700 }} />
+                            style={{ width: '100%', fontSize: 10.5, border: 'none', background: 'transparent', color: C.text, fontWeight: 700 }} />
                         ) : (
-                          <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>{p.label}</div>
+                          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.label}</div>
                         )}
-                        <input placeholder="value1, value2" defaultValue={p.values.join(', ')}
+                        <input placeholder="v1, v2" defaultValue={p.values.join(', ')}
                           onBlur={e => updateGridParam(i, { values: e.target.value.split(',').map(s => s.trim()).filter(Boolean).map(v => (isNaN(v) ? v : Number(v))) })}
-                          style={{ width: '100%', fontSize: 11, border: 'none', background: 'transparent', color: C.muted, marginTop: 1 }} />
+                          style={{ width: '100%', fontSize: 10, border: 'none', background: 'transparent', color: C.muted, marginTop: 1 }} />
                         {p.best !== null && p.best !== undefined && (
-                          <div style={{ fontSize: 10.5, color: C.success, fontWeight: 700, marginTop: 2 }}>✓ best: {String(p.best)}</div>
+                          <div style={{ fontSize: 9.5, color: C.success, fontWeight: 700, marginTop: 2 }}>✓ {String(p.best)}</div>
                         )}
                       </div>
-                      <button onClick={() => removeGridParam(i)} title="Remove"
-                        style={{ border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 13 }}>✕</button>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button onClick={addGridParam} style={smallBtnStyle(C, false)}>＋</button>
                     <button onClick={runGridSearch} disabled={gridSearchLoading || !gridParams.length}
@@ -1223,13 +1735,11 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           {/* Threshold */}
           {taskType === 'classification' && (
             <div style={{ marginBottom: 18, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
-              <SectionLabel info={<InfoIcon content={
-                'Classification Threshold:\n\nYour model outputs a probability. The threshold decides the cutoff:\n' +
-                '• P(positive) ≥ threshold → predict "Positive"\n• below it → predict "Negative"\n\n' +
-                'Default: 50%.\nLower threshold → more positives flagged → higher Recall, lower Precision.\nHigher threshold → fewer positives flagged → higher Precision, lower Recall.\n\n' +
-                'Example: lower it for cancer screening (catching a real case matters more than a false alarm). Raise it for fraud alerts (avoid annoying legitimate customers).\n\n' +
-                'Only applies to binary classification.'
-              } />}>Decision Threshold</SectionLabel>
+              <SectionLabel info={<InfoIcon itemsTitle="Decision Threshold" footer="Only applies to binary classification." items={[
+                { label: 'How It Works', desc: 'Your model outputs a probability. The threshold decides the cutoff:\nP(positive) ≥ threshold → predict "Positive"\nbelow it → predict "Negative"' },
+                { label: 'Default & Effect', desc: 'Default: 50%.\nLower threshold → more positives flagged → higher Recall, lower Precision.\nHigher threshold → fewer positives flagged → higher Precision, lower Recall.' },
+                { label: 'Example', desc: 'Lower it for cancer screening (catching a real case matters more than a false alarm). Raise it for fraud alerts (avoid annoying legitimate customers).' },
+              ]} />}>Decision Threshold</SectionLabel>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <input type="range" min={0.01} max={0.99} step={0.01} value={threshold}
                   onChange={e => setThreshold(Number(e.target.value))} style={{ flex: 1 }} />
@@ -1257,9 +1767,12 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           </button>
           {trainingError && <div style={{ fontSize: 11.5, color: C.danger, marginTop: 8 }}>⚠ {trainingError}</div>}
 
-          {/* Model History */}
+          {/* Model History — only THIS section scrolls (capped height), not
+              the whole left panel, so the settings above it never move out
+              of view while scrolling a long history list. */}
           <div style={{ marginTop: 26, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
             <SectionLabel>Model History</SectionLabel>
+            <div style={{ maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
             {modelHistory.length === 0 ? (
               <div style={{ fontSize: 11.5, color: C.muted, padding: '8px 0' }}>No models trained yet this session.</div>
             ) : (
@@ -1275,7 +1788,8 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                     {modelLabel(m.model_name)}
                   </span>
                   <span style={{ fontSize: 10.5, color: C.muted, flexShrink: 0 }}>
-                    {m.task_type === 'clustering' ? `k=${m.n_clusters}` : m[m.metric] != null ? `${m.metric}: ${m[m.metric]}` : ''}
+                    {m.task_type === 'clustering' ? `k=${m.n_clusters}`
+                      : m[m.metric] != null ? `${m.metric}: ${m.task_type === 'classification' ? pct(m[m.metric]) : m[m.metric]}` : ''}
                   </span>
                   <button onClick={e => { e.stopPropagation(); setHistoryMenuOpen(historyMenuOpen === m.model_id ? null : m.model_id) }}
                     style={{ border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, position: 'relative' }}>
@@ -1292,11 +1806,12 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                 </div>
               ))
             )}
+            </div>
           </div>
         </div>
 
         {/* ══════════════════ RIGHT PANEL — output ══════════════════ */}
-        <div style={{ flex: 1, minWidth: 0, height: '100vh', overflowY: 'auto', padding: '20px 28px 60px' }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: '20px 28px 60px' }}>
 
           {!selectedModel && !activeResult && (
             <div style={{ textAlign: 'center', padding: '120px 0', color: C.muted }}>
@@ -1306,23 +1821,38 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
             </div>
           )}
 
-          {selectedModel && !activeResult && (selectedModel === 'knn' || selectedModel === 'kmeans') && (
-            <ChartCard title={selectedModel === 'knn' ? 'KNN — Optimal K Search' : 'K-Means — Optimal Clusters (Elbow Method)'}
-              sub={selectedModel === 'knn'
-                ? `Odd values of k from 1 to 39. Y-axis: ${currentMetricInfo.label}. Best k highlighted.`
-                : 'Inertia (within-cluster sum of squares) for k from 2 to 15. Elbow = best trade-off.'}>
+          {/* Shows whenever there's elbow data (or it's loading) and no
+              trained result yet — including right after this page remounts
+              with elbowData restored from localStorage, so the user never
+              has to re-pick KNN/K-Means just to see the curve again. */}
+          {!activeResult && (elbowLoading || elbowData) && selectedModel === 'knn' && (
+            <ChartCard title="KNN — Optimal K Search"
+              sub={`Odd values of k from 1 to 39. Y-axis: ${currentMetricInfo.label}. Best k highlighted.`}>
               {elbowLoading && <div style={{ textAlign: 'center', padding: 60, color: C.muted }}>⏳ Computing elbow curve…</div>}
               {!elbowLoading && elbowData && (
                 <ElbowChart
                   kValues={elbowData.k_values}
-                  values={selectedModel === 'knn' ? elbowData.scores : elbowData.inertias}
+                  values={elbowData.scores}
                   bestK={elbowData.best_k}
                   currentK={kValue}
-                  yLabel={selectedModel === 'knn' ? currentMetricInfo.label : 'Inertia'}
+                  yLabel={currentMetricInfo.label}
                   onPick={handleKPick}
                 />
               )}
             </ChartCard>
+          )}
+
+          {!activeResult && (elbowLoading || elbowData) && selectedModel === 'kmeans' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <ChartCard title="Elbow Method — Inertia & Entropy"
+                sub="Both curves normalized to a 0–100 relative scale for comparison.">
+                {elbowLoading && <div style={{ textAlign: 'center', padding: 60, color: C.muted }}>⏳ Computing elbow curve…</div>}
+                {!elbowLoading && elbowData && (
+                  <KMeansElbowChart elbowData={elbowData} currentK={kValue} onPick={handleKPick} C={C} />
+                )}
+              </ChartCard>
+              {!elbowLoading && elbowData && <ElbowExplanationCard C={C} />}
+            </div>
           )}
 
           {selectedModel && !activeResult && selectedModel !== 'knn' && selectedModel !== 'kmeans' && (
@@ -1340,23 +1870,25 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
         </div>
       </div>
 
-      {/* Forward-navigation button always lives at the page's own bottom
-          (standing platform rule) — Training renders its own two-panel
-          layout rather than using App.jsx's shared footer slot, so this is
-          THE bottom of the page's normal document flow, sitting below both
-          sticky/scrolling panels once the page itself is scrolled down. */}
-      <div style={{ textAlign: 'center', padding: '18px 0 26px' }}>
-        <button onClick={() => onNext && onNext()} disabled={!activeResult}
-          style={{
-            padding: '11px 26px', borderRadius: 10, border: 'none',
-            background: activeResult ? C.primary : C.faint,
-            color: activeResult ? 'white' : C.muted, fontWeight: 800, fontSize: 13.5,
-            cursor: activeResult ? 'pointer' : 'default',
-            boxShadow: activeResult ? `0 4px 16px ${C.primary}44` : 'none',
-          }}>
-          {activeResult ? 'Continue to Feature Importance →' : 'Train a model to continue →'}
-        </button>
-      </div>
+      {/* Forward-navigation button — only rendered once there's an actual
+          result to continue with. The disabled "Train a model to continue"
+          placeholder (shown whenever nothing was trained yet) was removed
+          per explicit request; the real button still needs to exist once
+          a result exists, since this page is the only way to reach Feature
+          Importance (App.jsx's forward navigation is exclusively through
+          each page's own "Continue" button - TopNav is backward-only). */}
+      {activeResult && (
+        <div style={{ textAlign: 'center', padding: '14px 0 16px', flexShrink: 0, borderTop: `1px solid ${C.border}` }}>
+          <button onClick={() => onNext && onNext()}
+            style={{
+              padding: '11px 26px', borderRadius: 10, border: 'none',
+              background: C.primary, color: 'white', fontWeight: 800, fontSize: 13.5,
+              cursor: 'pointer', boxShadow: `0 4px 16px ${C.primary}44`,
+            }}>
+            Continue to Feature Importance →
+          </button>
+        </div>
+      )}
 
       {showEditParams && (
         <EditAttributesPopup modelId={selectedModel} values={{ ...MODEL_PARAM_DEFS[selectedModel]?.reduce((a, d) => ({ ...a, [d.name]: d.default }), {}), ...modelParams }}
@@ -1453,6 +1985,7 @@ function TrainingResults({ result, outputOptions, onEditOutput, threshold }) {
             </ResponsiveContainer>
           </ChartCard>
         </div>
+        <AllPairsSection viz={result.cluster_viz} />
       </div>
     )
   }
@@ -1467,10 +2000,10 @@ function TrainingResults({ result, outputOptions, onEditOutput, threshold }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px,1fr))', gap: 12 }}>
         {isClassification ? (
           <>
-            <MetricCard label="Accuracy" value={result.accuracy} accent={C.primary} />
-            <MetricCard label="F1-Score" value={result.f1} accent="#8b5cf6" />
-            <MetricCard label="Precision" value={result.precision} accent={C.success} />
-            <MetricCard label="Recall" value={result.recall} accent={C.warning} />
+            <MetricCard label="Accuracy" icon="🎯" value={pct(result.accuracy)} ratio={result.accuracy} accent={C.primary} />
+            <MetricCard label="F1-Score" icon="⚖" value={pct(result.f1)} ratio={result.f1} accent="#8b5cf6" />
+            <MetricCard label="Precision" icon="🔬" value={pct(result.precision)} ratio={result.precision} accent={C.success} />
+            <MetricCard label="Recall" icon="📡" value={pct(result.recall)} ratio={result.recall} accent={C.warning} />
           </>
         ) : (
           <>
@@ -1487,9 +2020,9 @@ function TrainingResults({ result, outputOptions, onEditOutput, threshold }) {
           flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, fontWeight: 800, color: C.primary }}>{result.cv_scores.length}-Fold CV:</span>
           {result.cv_scores.map((s, i) => (
-            <span key={i} style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: C.primary, color: 'white' }}>{s}</span>
+            <span key={i} style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: C.primary, color: 'white' }}>{pct(s)}</span>
           ))}
-          <span style={{ fontSize: 12, color: C.text, marginLeft: 6 }}>Mean: <strong>{result.cv_mean}</strong> ± {result.cv_std}</span>
+          <span style={{ fontSize: 12, color: C.text, marginLeft: 6 }}>Mean: <strong>{pct(result.cv_mean)}</strong> ± {pct(result.cv_std)}</span>
         </div>
       )}
 

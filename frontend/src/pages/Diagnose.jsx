@@ -1323,6 +1323,37 @@ function RedoConfirmModal({ C, onCancel, onConfirm, working }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// REMOVE COLUMN CONFIRMATION MODAL — same scrim/overlayCard shape as
+// RedoConfirmModal above (and every other page's Redo confirm), replacing
+// the native window.confirm() this action used to show.
+// ─────────────────────────────────────────────────────────────────────────────
+function RemoveColumnModal({ C, label, plural, onCancel, onConfirm }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: C.scrim, backdropFilter: 'blur(4px)',
+      zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: C.overlayCard, border: `1px solid ${C.border}`, borderRadius: 16, padding: 30,
+        maxWidth: 420, width: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+        <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8, color: C.text }}>
+          Remove {plural ? 'Columns' : 'Column'}?
+        </div>
+        <p style={{ fontSize: 13, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>
+          Remove {label} from analysis? This can be undone by re-adding it manually if you change your
+          mind, but it won't reappear on its own.
+        </p>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onCancel} style={{ padding: '9px 20px', borderRadius: 10, border: `1px solid ${C.border}`,
+            background: C.faint, color: C.text, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+          <button onClick={onConfirm} style={{ padding: '9px 20px', borderRadius: 10, border: 'none',
+            background: C.danger, color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+            Remove
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN DIAGNOSE PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 export default function DiagnosePage({ projectData, onNext, onUpdateData,
@@ -1378,6 +1409,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData,
   }
   const [redoModal, setRedoModal] = useState(false)
   const [redoing, setRedoing] = useState(false)
+  const [removeColumnModal, setRemoveColumnModal] = useState(false)
 
   // Set true the first time any of the 5 mutating actions below fires (cell
   // edit, add row, delete column, rename column, or an issue-card fix).
@@ -1568,14 +1600,14 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData,
   // not two competing selection states).
   const deleteSelectedColumns = () => {
     if (!selectedColumns.length) return
-    const label = selectedColumns.length === 1
-      ? `column "${selectedColumns[0]}"`
-      : `columns ${selectedColumns.join(', ')}`
-    const ok = window.confirm(`Remove ${label} from analysis? This can be undone by re-adding it manually if you change your mind, but it won't reappear on its own.`)
-    if (!ok) return
+    setRemoveColumnModal(true)
+  }
+
+  const confirmDeleteSelectedColumns = () => {
     setHasEdited(true)
     setRemovedColumns(prev => new Set([...prev, ...selectedColumns]))
     setSelectedColumns([])
+    setRemoveColumnModal(false)
   }
 
   const renameColumn = (oldName, newName) => {
@@ -1618,7 +1650,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData,
   if (!rows || !columns) {
     return (
       <div style={{ minHeight: '100vh', background: C.bg, fontFamily: 'system-ui, sans-serif' }}>
-        <TopNav active={active || 'diagnose'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+        <TopNav active={active || 'diagnose'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
         <InlineLoader C={C} onFile={loadFile} busy={busy} />
       </div>
     )
@@ -1648,12 +1680,19 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData,
         .diag-focus-fix input:focus-visible { outline: 2px solid ${focusRingColor}; outline-offset: 2px; }
         .diagnose-page ::selection { background-color: ${selectionBg}; }
       `}</style>
-      <TopNav active={active || 'diagnose'} onNavigate={onNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={active || 'diagnose'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <StatusBar C={C} filename={filename || 'dataset.csv'} health={health} missingPct={missingPct}
         outlierTotal={outlierTotal} dupCount={dupCount} targetCol={targetCol} balance={balance}
         onRedo={() => setRedoModal(true)} />
       {redoModal && (
         <RedoConfirmModal C={C} onCancel={() => setRedoModal(false)} onConfirm={handleRedo} working={redoing} />
+      )}
+      {removeColumnModal && (
+        <RemoveColumnModal C={C}
+          plural={selectedColumns.length > 1}
+          label={selectedColumns.length === 1 ? `column "${selectedColumns[0]}"` : `columns ${selectedColumns.join(', ')}`}
+          onCancel={() => setRemoveColumnModal(false)}
+          onConfirm={confirmDeleteSelectedColumns} />
       )}
       <SharedVersionsBar versions={versions} />
       {saving && (
