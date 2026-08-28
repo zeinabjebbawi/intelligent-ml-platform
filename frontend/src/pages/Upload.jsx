@@ -1331,11 +1331,18 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
 
   return (
     <div style={{
-      minHeight: '100vh', background: C.bg,
+      height: '100vh', overflow: 'hidden', background: C.bg,
       fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
-      transition: 'background 0.2s',
+      transition: 'background 0.2s', display: 'flex', flexDirection: 'column',
     }}>
       <TopNav active={active || 'upload'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
+      {/* TopNav stays fixed; everything below scrolls in this one bounded
+          region instead of the whole document scrolling - same "fixed
+          page, internal scroll where needed" convention as Simulator/Train
+          and Test, just applied to a single scroll region here since this
+          page's content (dropzone, gallery, stats, preview table) doesn't
+          split into a settings/results two-panel shape the way those do. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <div style={{ maxWidth: 1000, margin: '0 auto', padding: '28px 32px 64px' }}>
 
         {/* Two-column region: left content dims when drawer is open, and
@@ -1426,6 +1433,7 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
             </div>
           )}
         </div>
+      </div>
       </div>
 
       <DatasetSetupDrawer

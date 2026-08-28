@@ -197,7 +197,11 @@ const WaterfallChart = ({ data }) => {
   const xMax = Math.max(...allX) + Math.abs(final_value - base_value) * 0.12
   const xRange = xMax - xMin || 1
 
-  const W = 640, ROW_H = 38, PAD_L = 162, PAD_R = 22, PAD_T = 48, PAD_B = 32
+  // ROW_H shrinks as the bar count grows (capped at MAX_BARS=10 above) so
+  // the whole chart fits within one screen's height without its own
+  // scrollbar, instead of a fixed row height letting a 10-bar chart run
+  // taller than the space freed up elsewhere on the page.
+  const W = 640, ROW_H = Math.max(20, Math.min(38, 300 / rows.length)), PAD_L = 162, PAD_R = 22, PAD_T = 40, PAD_B = 26
   const H = rows.length * ROW_H + PAD_T + PAD_B
 
   const xPx = v => PAD_L + ((v - xMin) / xRange) * (W - PAD_L - PAD_R)
@@ -613,37 +617,35 @@ export default function SimulatorPage({
   const features = config?.features || []
 
   return (
-    <div style={{ background: C.bg, minHeight: '100vh' }}>
+    <div style={{ background: C.bg, height: '100vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <TopNav active={active || 'simulator'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       <VersionsBar versions={versions} />
-      <div style={{ padding: '4px 32px 0', fontSize: 11, color: C.muted }}>
-        📌 Analysis only — no new dataset version is created on this page. It reads the model trained on
-        Train and Test; use the nav above to go back there at any time.
-      </div>
-
-      <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '18px 32px', marginTop: 10 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
-          <div>
-            <h1 style={{ fontSize: 24, fontWeight: 900, color: C.text, marginBottom: 3 }}>Simulator</h1>
-            <p style={{ fontSize: 12.5, color: C.muted }}>
-              Explore model behavior with custom inputs, or predict an entire unlabeled dataset in one batch.
-            </p>
-          </div>
-          {config && (
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20, background: C.primarySoft, color: C.primary }}>
-                Model: {config.model_name}
-              </span>
-              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: C.faint, color: C.muted }}>
-                {features.length} features
-              </span>
-            </div>
-          )}
+      {/* Header condensed to one row (was a title + a full description
+          paragraph + a separate banner line stacked above it) - freed
+          space is what lets the SHAP waterfall grow to fit without an
+          internal scroll below. */}
+      <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '10px 32px', flexShrink: 0,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <h1 style={{ fontSize: 16, fontWeight: 900, color: C.text }}>Simulator</h1>
+          <span style={{ fontSize: 11, color: C.muted }}>
+            📌 Reads the model trained on Train and Test — no new dataset version is created here.
+          </span>
         </div>
+        {config && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20, background: C.primarySoft, color: C.primary }}>
+              Model: {config.model_name}
+            </span>
+            <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: C.faint, color: C.muted }}>
+              {features.length} features
+            </span>
+          </div>
+        )}
       </div>
 
       {!modelPklPath && (
-        <div style={{ textAlign: 'center', padding: '90px 0', color: C.muted }}>
+        <div style={{ textAlign: 'center', padding: '90px 0', color: C.muted, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ fontSize: 38, marginBottom: 14 }}>🔮</div>
           <div style={{ fontWeight: 800, fontSize: 16, color: C.text, marginBottom: 6 }}>No trained model found</div>
           <div style={{ fontSize: 13, marginBottom: 20 }}>Train a model on the Train and Test page first — the Simulator explores whichever model you trained most recently.</div>
@@ -656,7 +658,7 @@ export default function SimulatorPage({
       )}
 
       {modelPklPath && loading && (
-        <div style={{ textAlign: 'center', padding: '90px 0', color: C.muted }}>
+        <div style={{ textAlign: 'center', padding: '90px 0', color: C.muted, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ fontSize: 26, marginBottom: 12, display: 'inline-block', animation: 'sim-spin 1s linear infinite' }}>◐</div>
           <p>Loading feature configuration…</p>
           <style>{`@keyframes sim-spin{to{transform:rotate(360deg)}}`}</style>
@@ -665,24 +667,25 @@ export default function SimulatorPage({
 
       {modelPklPath && !loading && error && (
         <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 12,
-          padding: 20, color: C.danger, margin: '24px 32px', fontSize: 13 }}>⚠ {error}</div>
+          padding: 20, color: C.danger, margin: '24px 32px', fontSize: 13, flex: 1, minHeight: 0, overflowY: 'auto' }}>⚠ {error}</div>
       )}
 
       {modelPklPath && !loading && !error && config && (
-        <div style={{ padding: '24px 32px 0' }}>
+        <div style={{ padding: '10px 32px 0', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
 
-          {/* ── Mode Toggle ── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20, width: 'fit-content',
-            background: C.faint, borderRadius: 12, padding: 4, border: `1px solid ${C.border}` }}>
+          {/* ── Mode Toggle ── (compact - freed vertical space goes to the
+              SHAP chart below so it fits without its own scroll) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 10, width: 'fit-content', flexShrink: 0,
+            background: C.faint, borderRadius: 10, padding: 3, border: `1px solid ${C.border}` }}>
             {[
               { key: 'single', label: '🎚 Single Entry', info: INFO_SIMULATOR },
               { key: 'batch', label: '📁 Batch Upload', info: INFO_BATCH },
             ].map(m => (
               <button key={m.key} onClick={() => setMode(m.key)}
-                style={{ padding: '8px 20px', borderRadius: 9, border: 'none',
+                style={{ padding: '5px 14px', borderRadius: 7, border: 'none',
                   background: mode === m.key ? C.card : 'transparent',
                   color: mode === m.key ? C.primary : C.muted,
-                  fontWeight: mode === m.key ? 700 : 500, fontSize: 13, cursor: 'pointer',
+                  fontWeight: mode === m.key ? 700 : 500, fontSize: 12, cursor: 'pointer',
                   boxShadow: mode === m.key ? shadow2 : 'none', transition: 'all 0.15s' }}>
                 {m.label}
               </button>
@@ -695,19 +698,25 @@ export default function SimulatorPage({
               default align-items:stretch) so "Settings for One Entry" always
               reaches the page bottom. RIGHT is a flex column where the
               Prediction card sizes to its own content (secondary, de-emphasized)
-              and the SHAP card absorbs all the height that frees up. */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              and the SHAP card absorbs all the height that frees up. The grid
+              itself is flex:1/minHeight:0/overflow:hidden — bounded to
+              whatever vertical space is left in the page (no page-level
+              scroll at all, matching the platform's fixed-viewport pages) —
+              so any content taller than that space scrolls inside its OWN
+              card (the settings list, the SHAP chart) instead of growing
+              the page. */}
+          <div style={{ display: 'grid', gridTemplateColumns: '0.82fr 1.18fr', gap: 20, flex: 1, minHeight: 0, overflow: 'hidden' }}>
 
             {/* ── LEFT PANEL ── */}
-            <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
               {mode === 'single' ? (
                 <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2,
                   border: `1px solid ${C.border}`, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14, flexShrink: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>Settings for One Entry</div>
                     <InfoIcon {...INFO_SIMULATOR} width={300} />
                   </div>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 12, flexShrink: 0 }}>
                     Adjust sliders and dropdowns — prediction updates automatically after 300ms.
                   </div>
                   <SingleEntrySection features={features} values={values} onChange={handleValueChange} predicting={predicting} fillHeight />
@@ -727,7 +736,7 @@ export default function SimulatorPage({
             </div>
 
             {/* ── RIGHT PANEL ── */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, minHeight: 0 }}>
               <div style={{ background: C.card, borderRadius: cardR, padding: '12px 18px', boxShadow: shadow2,
                 border: `1px solid ${C.border}`, borderTop: `3px solid ${C.primary}`, flex: '0 0 auto' }}>
                 <div style={{ fontWeight: 700, fontSize: 12, color: C.text, marginBottom: 8 }}>
@@ -739,23 +748,30 @@ export default function SimulatorPage({
                   batchData={mode === 'batch' ? batchData : null} compact />
               </div>
 
-              <div style={{ background: C.card, borderRadius: cardR, padding: '18px 20px', boxShadow: shadow2, border: `1px solid ${C.border}`,
+              <div style={{ background: C.card, borderRadius: cardR, padding: '14px 18px', boxShadow: shadow2, border: `1px solid ${C.border}`,
                 flex: '1 1 auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexShrink: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>SHAP Waterfall — Why this prediction?</div>
                   <InfoIcon {...INFO_WATERFALL} width={340} />
                 </div>
-                <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, flexShrink: 0 }}>
                   Each bar shows how one feature pushed the prediction above or below the model's average.
                 </div>
-                <WaterfallChart data={shapData} />
+                {/* No scroll here on purpose - WaterfallChart's own ROW_H
+                    shrinks as bar count grows (capped at 10 bars) so the
+                    whole chart fits this space; centered in case the
+                    freed-up card is taller than the chart needs. */}
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+                  <WaterfallChart data={shapData} />
+                </div>
               </div>
             </div>
           </div>
 
           {/* Forward-navigation button always at the page's own bottom
-              (standing platform rule). */}
-          <div style={{ textAlign: 'center', padding: '24px 0 34px', marginTop: 20, borderTop: `1px solid ${C.border}` }}>
+              (standing platform rule) - flexShrink:0 so it stays pinned and
+              visible rather than being pushed out by the grid above. */}
+          <div style={{ textAlign: 'center', padding: '16px 0', marginTop: 14, borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
             <button onClick={() => onNext && onNext('report', {})}
               style={{ padding: '11px 28px', borderRadius: 10, border: 'none', background: C.primary,
                 color: 'white', fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: `0 6px 20px ${C.primary}44` }}>

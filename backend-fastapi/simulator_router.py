@@ -80,8 +80,28 @@ def prepare_row(df: pd.DataFrame, feature_values: Dict[str, Any],
                 row[feat] = 0
     return pd.DataFrame([row])
 
+def apply_cluster_scaling(mdata: dict, X: pd.DataFrame) -> pd.DataFrame:
+    """K-Means is trained on STANDARDIZED features (training_router.py's
+    clustering branch fits it against a StandardScaler-transformed copy of
+    X, then throws that scaler away without saving it) - so predict() on a
+    raw, unscaled row was comparing e.g. a real BALANCE of 30,000 against
+    centroid coordinates that live in roughly [-3, 3]. That mismatch makes
+    the "nearest cluster" answer almost totally insensitive to realistic
+    slider movement, since the huge raw-vs-scaled unit gap swamps out any
+    actual change in the input - this was the root cause of the Simulator
+    page's clustering prediction looking permanently stuck. The scaler is
+    now persisted in the model's own .pkl (see training_router.py) and
+    reapplied here before every predict()/SHAP call; every other model
+    either doesn't need scaling (tree-based) or already carries its own
+    scaler inside a Pipeline (see build_model), so mdata["scaler"] is only
+    ever set for a clustering model and this is a no-op for the rest."""
+    scaler = mdata.get("scaler")
+    if scaler is None:
+        return X
+    return pd.DataFrame(scaler.transform(X), columns=X.columns, index=X.index)
+
 def compute_shap_waterfall(model, X_row: pd.DataFrame, background: pd.DataFrame,
-                           model_name: str, task_type: str) -> dict:
+                           model_name: str, task_type: str, X_row_display: pd.DataFrame = None) -> dict:
     """Instance-level SHAP values for exactly one row.
 
     `background` MUST be a real sample of OTHER rows (e.g. from the
@@ -89,7 +109,15 @@ def compute_shap_waterfall(model, X_row: pd.DataFrame, background: pd.DataFrame,
     function passed X_row as its own "background," which for
     KernelExplainer/LinearExplainer means every perturbation collapses
     back onto the same single point (nothing to contrast against), making
-    the resulting SHAP values meaningless in the KernelExplainer case."""
+    the resulting SHAP values meaningless in the KernelExplainer case.
+
+    `X_row` is whatever the MODEL actually needs (for K-Means this is
+    scaled — see apply_cluster_scaling below); `X_row_display` is the raw,
+    human-readable version shown in the waterfall's "33036.43 = PURCHASES"
+    labels. They're the same object for every other model, since nothing
+    else needs a separate scaled copy of the input."""
+    if X_row_display is None:
+        X_row_display = X_row
     try:
         import shap
     except ImportError:
@@ -124,7 +152,7 @@ def compute_shap_waterfall(model, X_row: pd.DataFrame, background: pd.DataFrame,
         sv = sv[0]
 
     features = [
-        {"name": col, "value": safe_round(X_row[col].iloc[0], 4) or 0.0, "shap": safe_round(sv[i]) or 0.0}
+        {"name": col, "value": safe_round(X_row_display[col].iloc[0], 4) or 0.0, "shap": safe_round(sv[i]) or 0.0}
         for i, col in enumerate(X_row.columns)
     ]
     final_val = base_val + float(np.sum([f["shap"] for f in features]))
@@ -260,12 +288,14 @@ def predict_single(req: PredictSingleReq):
         task_type = mdata.get("task_type", req.task_type)
 
         X_row = prepare_row(df, req.feature_values, feature_names).fillna(0)
-        pred_res = format_prediction(model, X_row, class_names, task_type, req.threshold)
+        X_row_model = apply_cluster_scaling(mdata, X_row)
+        pred_res = format_prediction(model, X_row_model, class_names, task_type, req.threshold)
 
         model_name = mdata.get("model_name", "")
         bg = df[feature_names].fillna(0)
         background = bg.sample(min(20, len(bg)), random_state=42) if len(bg) else X_row
-        shap_result = compute_shap_waterfall(model, X_row, background, model_name, task_type)
+        background_model = apply_cluster_scaling(mdata, background)
+        shap_result = compute_shap_waterfall(model, X_row_model, background_model, model_name, task_type, X_row_display=X_row)
 
         return {"prediction": pred_res, "shap": shap_result}
     except HTTPException:
@@ -312,30 +342,34 @@ async def predict_batch(
             for f in missing:
                 X[f] = 0.0
             X = X[feature_names]
+        # See apply_cluster_scaling's docstring - a no-op for every model
+        # except K-Means, which needs its input on the same standardized
+        # scale it was actually trained/clustered on.
+        X_model = apply_cluster_scaling(mdata, X)
 
         if real_task_type == "regression":
-            preds = model.predict(X)
+            preds = model.predict(X_model)
             df_up["Predicted"] = [safe_round(p, 4) or 0.0 for p in preds]
         elif real_task_type == "clustering":
-            preds = model.predict(X)
+            preds = model.predict(X_model)
             df_up["Predicted_Cluster"] = [int(p) for p in preds]
         else:
-            preds = model.predict(X)
+            preds = model.predict(X_model)
             if class_names:
                 df_up["Predicted"] = [class_names[int(p)] if 0 <= int(p) < len(class_names) else str(p) for p in preds]
             else:
                 df_up["Predicted"] = [str(p) for p in preds]
             if hasattr(model, "predict_proba"):
-                proba = model.predict_proba(X)
+                proba = model.predict_proba(X_model)
                 df_up["Confidence"] = [safe_round(max(row), 3) or 0.0 for row in proba]
 
         shap_result = {}
         first_pred = {}
         if len(X) > 0:
             model_name = mdata.get("model_name", "")
-            background = X.sample(min(20, len(X)), random_state=42)
-            shap_result = compute_shap_waterfall(model, X.iloc[[0]], background, model_name, real_task_type)
-            first_pred = {"prediction": format_prediction(model, X.iloc[[0]], class_names, real_task_type)}
+            background_model = X_model.sample(min(20, len(X_model)), random_state=42)
+            shap_result = compute_shap_waterfall(model, X_model.iloc[[0]], background_model, model_name, real_task_type, X_row_display=X.iloc[[0]])
+            first_pred = {"prediction": format_prediction(model, X_model.iloc[[0]], class_names, real_task_type)}
 
         result_id = str(uuid.uuid4())[:8]
         result_path = os.path.join(PREDICT_DIR, f"predictions_{result_id}.csv")

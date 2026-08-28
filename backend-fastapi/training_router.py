@@ -155,6 +155,44 @@ def prepare_features(df: pd.DataFrame, target_col: Optional[str]):
         raise HTTPException(400, "No numeric feature columns available for training.")
     return X, y
 
+def encode_classification_target(y: pd.Series, task_type: str):
+    """Single source of truth for turning a raw target column into the
+    integer class labels sklearn expects - used by BOTH /train and
+    /grid-search so the two endpoints can never disagree about how a
+    dataset's target should be read. Previously each endpoint carried its
+    own near-identical copy of this logic; a genuine divergence there is
+    exactly the kind of bug that lets grid search silently see a different
+    (and possibly ill-typed) target than the training run that ran
+    moments earlier against the very same file. Also runs an explicit
+    sklearn type_of_target check up front - if the target still doesn't
+    look like discrete classes after encoding (e.g. a continuous numeric
+    column that was mistakenly treated as a classification target), this
+    raises ONE clear, readable error here instead of letting a raw
+    "Unknown label type: continuous" exception surface later from deep
+    inside GridSearchCV's internal refit step, which is unprotected by
+    error_score and produces a multi-paragraph raw traceback the user has
+    no way to act on."""
+    from sklearn.preprocessing import LabelEncoder
+    le = None
+    class_names: List[str] = []
+    if task_type == "classification" and y is not None:
+        if not pd.api.types.is_numeric_dtype(y):
+            le = LabelEncoder()
+            y = pd.Series(le.fit_transform(y.astype(str)), index=y.index)
+            class_names = [str(c) for c in le.classes_]
+        else:
+            class_names = [str(c) for c in sorted(y.unique())]
+        from sklearn.utils.multiclass import type_of_target
+        if type_of_target(y) not in ("binary", "multiclass"):
+            raise HTTPException(
+                400,
+                f"The target column doesn't look like discrete classes for classification "
+                f"({len(class_names)} distinct value(s) found, and they don't form clean "
+                f"categories). If this is meant to be a continuous value, switch the task "
+                f"type to regression instead."
+            )
+    return y, le, class_names
+
 def find_elbow(values: List[float]) -> int:
     """Elbow via maximum curvature (2nd derivative) of a monotonically
     decreasing curve (K-Means inertia)."""
@@ -502,7 +540,6 @@ def elbow_kmeans(req: ElbowKMeansReq):
 def grid_search(req: GridSearchReq):
     try:
         from sklearn.model_selection import GridSearchCV, StratifiedKFold, KFold
-        from sklearn.preprocessing import LabelEncoder
 
         df = read_df(req.file_path)
         if req.task_type == "clustering":
@@ -511,9 +548,7 @@ def grid_search(req: GridSearchReq):
             raise HTTPException(400, f"Target column '{req.target_column}' was not found in this dataset "
                                       f"(available columns: {', '.join(df.columns)}).")
         X, y = prepare_features(df, req.target_column)
-
-        if req.task_type == "classification" and not pd.api.types.is_numeric_dtype(y):
-            y = LabelEncoder().fit_transform(y.astype(str))
+        y, _, _ = encode_classification_target(y, req.task_type)
 
         model = build_model(req.model_name, {})
         # Cap grid size - each parameter is limited to 2-3 values by the
@@ -541,8 +576,14 @@ def grid_search(req: GridSearchReq):
               if (req.task_type == "classification" and req.stratified)
               else KFold(n_splits=cv_folds, shuffle=True, random_state=42))
 
+        # n_jobs=1 (not -1): joblib's process-based parallelism on Windows
+        # re-imports this module in each worker process rather than
+        # inheriting the parent's state, which has produced flaky/opaque
+        # failures here before. The grid is already capped at 60
+        # combinations above, so sequential fits stay fast enough without
+        # that extra layer of platform-specific instability.
         gs = GridSearchCV(model, param_grid, cv=cv,
-                          scoring=metric_to_sklearn(req.metric, req.task_type), n_jobs=-1, error_score=0)
+                          scoring=metric_to_sklearn(req.metric, req.task_type), n_jobs=1, error_score=0)
         t0 = time.time()
         gs.fit(X, y)
         elapsed = round(time.time() - t0, 2)
@@ -570,7 +611,14 @@ def grid_search(req: GridSearchReq):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Grid search failed: {str(e)}")
+        # Some sklearn failures (a bad fit deep inside cross-validation)
+        # come with a multi-paragraph message that includes a full raw
+        # traceback per failed fold - genuinely useful in a Python
+        # console, not useful (or readable) as a web error. Cropped to one
+        # line so the user gets a short, actionable message instead of a
+        # wall of text; the full detail still reaches the server log.
+        msg = str(e).strip().splitlines()[0][:300]
+        raise HTTPException(500, f"Grid search failed: {msg}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. TRAIN - main training endpoint
@@ -580,7 +628,7 @@ def grid_search(req: GridSearchReq):
 def train_model(req: TrainReq):
     try:
         from sklearn.model_selection import (train_test_split, StratifiedKFold, KFold, cross_val_predict)
-        from sklearn.preprocessing import LabelEncoder, StandardScaler
+        from sklearn.preprocessing import StandardScaler
 
         df = read_df(req.file_path)
         if req.task_type != "clustering" and not (req.target_column and req.target_column in df.columns):
@@ -590,15 +638,7 @@ def train_model(req: TrainReq):
         feature_names = list(X.columns)
         t_start = time.time()
 
-        le = None
-        class_names: List[str] = []
-        if req.task_type == "classification" and y is not None:
-            if not pd.api.types.is_numeric_dtype(y):
-                le = LabelEncoder()
-                y  = pd.Series(le.fit_transform(y.astype(str)), index=y.index)
-                class_names = [str(c) for c in le.classes_]
-            else:
-                class_names = [str(c) for c in sorted(y.unique())]
+        y, le, class_names = encode_classification_target(y, req.task_type)
 
         model = build_model(req.model_name, req.model_params)
 
@@ -611,10 +651,12 @@ def train_model(req: TrainReq):
             "class_names":   class_names,
         }
 
+        cluster_scaler = None
         if req.task_type == "clustering":
             sc = StandardScaler()
             X_sc = pd.DataFrame(sc.fit_transform(X), columns=X.columns, index=X.index)
             model.fit(X_sc)
+            cluster_scaler = sc
             labels = model.labels_
             centroids = sc.inverse_transform(model.cluster_centers_)
             result["n_clusters"]  = int(model.n_clusters)
@@ -640,6 +682,13 @@ def train_model(req: TrainReq):
             if req.task_type == "classification":
                 y_pred = _apply_threshold(model, X_te, class_names, req.threshold)
                 result.update(_classification_results(y_te, y_pred, class_names, req.output_options))
+                # Held-out probabilities + true labels for the binary case,
+                # so the frontend can re-apply a new threshold to THIS
+                # already-trained result instantly (no refit) when the
+                # slider moves - see the matching useMemo in TrainTest.jsx.
+                if hasattr(model, "predict_proba") and len(class_names) == 2:
+                    result["threshold_proba"] = [safe_round(p, 6) for p in model.predict_proba(X_te)[:, 1]]
+                    result["threshold_y_true"] = [int(v) for v in np.asarray(y_te)]
             else:
                 y_pred = model.predict(X_te)
                 result.update(_regression_results(y_te, y_pred))
@@ -654,6 +703,10 @@ def train_model(req: TrainReq):
                 if hasattr(model, "predict_proba") and len(class_names) == 2:
                     proba = cross_val_predict(model, X, y, cv=cv_splitter, method="predict_proba")
                     y_pred = (proba[:, 1] >= req.threshold).astype(int)
+                    # Same as the train/test-split branch above - lets the
+                    # frontend re-threshold this CV result live too.
+                    result["threshold_proba"] = [safe_round(p, 6) for p in proba[:, 1]]
+                    result["threshold_y_true"] = [int(v) for v in np.asarray(y)]
                 else:
                     y_pred = cross_val_predict(model, X, y, cv=cv_splitter, method="predict")
                 result.update(_classification_results(y, y_pred, class_names, req.output_options))
@@ -683,7 +736,7 @@ def train_model(req: TrainReq):
             pickle.dump({"model": model, "feature_names": feature_names,
                          "class_names": class_names, "label_encoder": le,
                          "model_name": req.model_name, "task_type": req.task_type,
-                         "threshold": req.threshold}, f)
+                         "threshold": req.threshold, "scaler": cluster_scaler}, f)
 
         result["model_id"]     = model_id
         result["model_file"]   = model_file
@@ -693,7 +746,10 @@ def train_model(req: TrainReq):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Training failed: {str(e)}")
+        # Same reasoning as /grid-search's handler - never forward a raw
+        # multi-line sklearn traceback as the user-facing error text.
+        msg = str(e).strip().splitlines()[0][:300]
+        raise HTTPException(500, f"Training failed: {msg}")
 
 
 def _apply_threshold(model, X_te, class_names, threshold):

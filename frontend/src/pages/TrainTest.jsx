@@ -536,7 +536,7 @@ const ElbowChart = ({ kValues, values, bestK, yLabel, currentK, onPick }) => {
   return (
     <div>
       <ResponsiveContainer width="100%" height={320}>
-        <LineChart data={data} onClick={handleClick} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}
+        <LineChart data={data} onClick={handleClick} margin={{ top: 26, right: 20, bottom: 0, left: 0 }}
           style={{ cursor: 'pointer' }}>
           <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
           <XAxis dataKey="k" type="number" domain={['dataMin', 'dataMax']}
@@ -1229,7 +1229,7 @@ const EditOutputPopup = ({ options, onApply, onClose }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // MODEL ACTIONS MENU (⋮ on a history row)
 // ─────────────────────────────────────────────────────────────────────────────
-const ModelActionsMenu = ({ entry, onView, onDownload, onVisualizeTree, onDelete, onClose }) => {
+const ModelActionsMenu = ({ entry, pos, popupRef, onView, onDownload, onVisualizeTree, onDelete, onClose }) => {
   const { C } = useTheme()
   const isTree = entry.model_name === 'decision_tree'
   const items = [
@@ -1241,8 +1241,9 @@ const ModelActionsMenu = ({ entry, onView, onDownload, onVisualizeTree, onDelete
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
-      <div style={{
-        position: 'absolute', right: 0, top: '100%', marginTop: 4, zIndex: 999,
+      <div ref={popupRef} style={{
+        position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0,
+        visibility: pos ? 'visible' : 'hidden', zIndex: 999,
         background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
         boxShadow: shadow, width: 210, padding: 5,
       }}>
@@ -1254,6 +1255,68 @@ const ModelActionsMenu = ({ entry, onView, onDownload, onVisualizeTree, onDelete
             <span>{icon}</span>{label}
           </div>
         ))}
+      </div>
+    </>
+  )
+}
+
+// Grid Search CV's ＋ button opens this - a plain pick-a-parameter list (no
+// typing) drawn from the model's real MODEL_PARAM_DEFS, already excluding
+// whatever's been added. Same fixed-position/viewport-clamp convention as
+// ModelActionsMenu above.
+const GridParamPickerPopup = ({ options, pos, popupRef, onPick, onClose }) => {
+  const { C } = useTheme()
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
+      <div ref={popupRef} style={{
+        position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0,
+        visibility: pos ? 'visible' : 'hidden', zIndex: 999,
+        background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
+        boxShadow: shadow, width: 220, maxHeight: 260, overflowY: 'auto', padding: 5,
+      }}>
+        {options.length === 0 ? (
+          <div style={{ padding: '10px 8px', fontSize: 11.5, color: C.muted }}>Every available parameter has already been added.</div>
+        ) : options.map(def => (
+          <div key={def.name} onClick={() => onPick(def)}
+            style={{ padding: '8px 10px', borderRadius: 7, fontSize: 12, color: C.text, cursor: 'pointer' }}
+            onMouseEnter={e => e.currentTarget.style.background = C.faint}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+            {def.label}
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
+// Opens right after a parameter is picked above (or when re-clicking an
+// existing card's values) - a checkbox list of concrete candidate values
+// (see candidateValuesFor), never a free-text field.
+const GridValuePickerPopup = ({ def, checked, candidates, pos, popupRef, onToggle, onSave, onClose }) => {
+  const { C } = useTheme()
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
+      <div ref={popupRef} style={{
+        position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0,
+        visibility: pos ? 'visible' : 'hidden', zIndex: 999,
+        background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
+        boxShadow: shadow, width: 230, padding: 10,
+      }}>
+        <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, marginBottom: 8 }}>{def.label}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 10, maxHeight: 200, overflowY: 'auto' }}>
+          {candidates.map(v => (
+            <label key={String(v)} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: C.text, cursor: 'pointer' }}>
+              <input type="checkbox" checked={checked.has(v)} onChange={() => onToggle(v)} />
+              {String(v)}
+            </label>
+          ))}
+        </div>
+        <button onClick={onSave} style={{
+          width: '100%', padding: '7px', borderRadius: 8, border: 'none', background: C.primary,
+          color: 'white', fontWeight: 700, fontSize: 12, cursor: 'pointer',
+        }}>Save</button>
       </div>
     </>
   )
@@ -1336,6 +1399,32 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   const [historyMenuOpen, setHistoryMenuOpen] = useState(null)
   const [treePopupEntry, setTreePopupEntry] = useState(null)
 
+  // The ⋮ menu used to render as a position:absolute child of its button,
+  // which lived inside Model History's own overflowY:auto scroll box - any
+  // row near the bottom got its menu clipped by that box's bounds no
+  // matter the z-index, since absolute positioning still respects an
+  // ancestor's overflow clipping. It's rendered once at the page root
+  // instead (same convention as EditAttributesPopup/treePopupEntry below)
+  // and positioned via position:fixed off the button's real on-screen
+  // rect - fixed positioning isn't clipped by ancestor overflow at all,
+  // and matches the InfoIcon popups' already-proven clamp-to-viewport
+  // pattern elsewhere in this file.
+  const historyMenuBtnRefs = useRef({})
+  const historyMenuPopupRef = useRef(null)
+  const [historyMenuPos, setHistoryMenuPos] = useState(null)
+  useLayoutEffect(() => {
+    if (!historyMenuOpen) { setHistoryMenuPos(null); return }
+    const btn = historyMenuBtnRefs.current[historyMenuOpen]
+    if (!btn) return
+    const r = btn.getBoundingClientRect()
+    const w = historyMenuPopupRef.current?.offsetWidth || 210
+    const h = historyMenuPopupRef.current?.offsetHeight || 0
+    const left = Math.max(12, Math.min(r.right - w, window.innerWidth - w - 12))
+    const top = Math.max(12, Math.min(r.bottom + 4, window.innerHeight - h - 12))
+    setHistoryMenuPos({ left, top })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyMenuOpen])
+
   const [defaults, setDefaults] = useState(null)
 
   // ── Load defaults once we know the dataset ──────────────────────────────
@@ -1415,9 +1504,100 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
     if (selectedModel === 'kmeans') setModelParams(p => ({ ...p, n_clusters: k }))
   }
 
-  const addGridParam = () => setGridParams(p => [...p, { name: '', label: '', values: [], best: null, custom: true }])
   const updateGridParam = (i, patch) => setGridParams(p => p.map((g, idx) => idx === i ? { ...g, ...patch } : g))
   const removeGridParam = (i) => setGridParams(p => p.filter((_, idx) => idx !== i))
+
+  // Parameter + value picking - see the pop-ups rendered near the ＋ button
+  // below. Replaces the old free-text "param name" / "v1, v2" inputs (no
+  // typing required for either step anymore): the ＋ button opens a list of
+  // this model's REAL constructor parameters (from MODEL_PARAM_DEFS, the
+  // same source "Edit Attributes Manually" uses) to pick a name from, then
+  // immediately opens a second pop-up of concrete candidate values to check
+  // off for that parameter. Existing cards' values are editable the same
+  // way by clicking their value pill again.
+  const [paramPickerOpen, setParamPickerOpen] = useState(false)
+  const [valuePicker, setValuePicker] = useState(null) // { index, def } - index -1 = adding a new param
+  const addParamBtnRef = useRef(null)
+  const valuePillRefs = useRef({})
+  const [paramPickerPos, setParamPickerPos] = useState(null)
+  const [valuePickerPos, setValuePickerPos] = useState(null)
+  const paramPickerPopupRef = useRef(null)
+  const valuePickerPopupRef = useRef(null)
+
+  useLayoutEffect(() => {
+    if (!paramPickerOpen || !addParamBtnRef.current) { setParamPickerPos(null); return }
+    const r = addParamBtnRef.current.getBoundingClientRect()
+    const w = paramPickerPopupRef.current?.offsetWidth || 220
+    const h = paramPickerPopupRef.current?.offsetHeight || 0
+    setParamPickerPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - w - 12)),
+      top: Math.max(12, Math.min(r.bottom + 6, window.innerHeight - h - 12)),
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramPickerOpen])
+
+  useLayoutEffect(() => {
+    if (!valuePicker) { setValuePickerPos(null); return }
+    // index -1 = a brand-new param just picked from GridParamPickerPopup,
+    // which has no value-pill of its own yet - anchor off the ＋ button
+    // it was opened from instead.
+    const btn = valuePicker.index === -1 ? addParamBtnRef.current : valuePillRefs.current[valuePicker.index]
+    if (!btn) return
+    const r = btn.getBoundingClientRect()
+    const w = valuePickerPopupRef.current?.offsetWidth || 230
+    const h = valuePickerPopupRef.current?.offsetHeight || 0
+    setValuePickerPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - w - 12)),
+      top: Math.max(12, Math.min(r.bottom + 6, window.innerHeight - h - 12)),
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valuePicker])
+
+  // Candidate values offered for a parameter: reuse GRID_SEARCH_DEFAULTS'
+  // own curated set when this exact param already has one (better choices
+  // than anything generated), a select field's own options otherwise, or a
+  // small spread around the numeric default as a last resort.
+  const candidateValuesFor = (def) => {
+    const curated = GRID_SEARCH_DEFAULTS[selectedModel]?.find(g => g.name === def.name)?.values
+    if (curated?.length) return curated
+    if (def.type === 'select') return def.options || []
+    const d = def.default
+    if (typeof d !== 'number') return [d]
+    if (def.min != null && def.max != null && def.max > def.min) {
+      return [...new Set([def.min, Math.round((def.min + def.max) / 2), def.max])]
+    }
+    if (!d) return [0, 0.01, 0.1]
+    return [...new Set([d / 2, d, d * 2].map(v => Math.round(v * 1e6) / 1e6))]
+  }
+
+  const openParamPicker = () => setParamPickerOpen(o => !o)
+  const pickParam = (def) => {
+    setParamPickerOpen(false)
+    setValuePicker({ index: -1, def, checked: new Set([def.default]) })
+  }
+  const openValuePickerForExisting = (i) => {
+    const def = MODEL_PARAM_DEFS[selectedModel]?.find(d => d.name === gridParams[i].name)
+      || { name: gridParams[i].name, label: gridParams[i].label || gridParams[i].name, type: 'number', default: gridParams[i].values[0] }
+    setValuePicker({ index: i, def, checked: new Set(gridParams[i].values) })
+  }
+  const toggleValuePickerChecked = (v) => {
+    setValuePicker(vp => {
+      const next = new Set(vp.checked)
+      next.has(v) ? next.delete(v) : next.add(v)
+      return { ...vp, checked: next }
+    })
+  }
+  const saveValuePicker = () => {
+    if (!valuePicker) return
+    const values = [...valuePicker.checked]
+    if (!values.length) { setValuePicker(null); return }
+    if (valuePicker.index === -1) {
+      setGridParams(p => [...p, { name: valuePicker.def.name, label: valuePicker.def.label, values, best: null, custom: false }])
+    } else {
+      updateGridParam(valuePicker.index, { values })
+    }
+    setValuePicker(null)
+  }
 
   const runGridSearch = async () => {
     setGridSearchLoading(true); setGridError(''); setGridSearchResult(null)
@@ -1435,9 +1615,15 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
     finally { setGridSearchLoading(false) }
   }
 
+  const [gridApplyFlash, setGridApplyFlash] = useState(false)
   const applyGridSearch = () => {
     if (!gridSearchResult) return
     setModelParams(p => ({ ...p, ...gridSearchResult.best_params }))
+    // Applying itself is instant (just merges into local state), so
+    // without this the button gave zero feedback that a click landed -
+    // a brief "✓ Applied" swap is enough to confirm it actually happened.
+    setGridApplyFlash(true)
+    setTimeout(() => setGridApplyFlash(false), 1400)
   }
 
   const handleTrain = async () => {
@@ -1482,6 +1668,88 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
 
   const currentMetricInfo = METRIC_INFO[selectedMetric]
 
+  // A single decision threshold has no defined meaning once there are more
+  // than 2 classes (there's no one "positive" probability to cut against) -
+  // _apply_threshold in training_router.py already correctly ignores it for
+  // multiclass and always falls back to argmax, so a 3+-class model's
+  // results genuinely never change no matter where the slider sits. That
+  // was never a bug, but the page gave zero indication of it, so a
+  // multiclass result and a bogus "threshold does nothing" bug looked
+  // identical from the user's side - this makes the limitation visible
+  // instead of silent.
+  const isThresholdInapplicable = activeResult?.task_type === 'classification' && (activeResult?.class_names?.length || 0) > 2
+
+  // A model whose predict_proba is 0%/100% for EVERY prediction has no
+  // middle ground for the threshold to move through either - not a bug,
+  // but easy to mistake for one. Decision Tree is the standout case: by
+  // default it grows until every leaf is pure, so its "probability" is
+  // just which side of a hard split a row landed on, never anything in
+  // between (confirmed directly: every one of a real run's probabilities
+  // came back as exactly 0.0 or 1.0). Other models normally return smooth
+  // in-between values instead. Purely informational (unlike the multiclass
+  // case above, the threshold IS genuinely being applied here) - it just
+  // won't visibly change anything across most of the slider's range.
+  const isThresholdDegenerate = !isThresholdInapplicable && activeResult?.threshold_proba?.length > 0
+    && activeResult.threshold_proba.every(p => p === 0 || p === 1)
+
+  // The Decision Threshold slider used to have zero effect until the user
+  // clicked "Train and Validate" again - it only ever got sent as a param
+  // on the NEXT full retrain, so dragging it against an already-trained
+  // result silently did nothing (confirmed against the backend directly:
+  // re-running /training/train with the same model but a different
+  // threshold DOES change accuracy/confusion matrix correctly - the bug was
+  // that nothing here ever re-ran it). Binary classification results now
+  // carry the held-out set's raw positive-class probabilities
+  // (threshold_proba/threshold_y_true), so the slider can be re-applied to
+  // THIS result's own predictions instantly, no refit needed - mirrors
+  // _classification_results' sklearn metrics (average='weighted',
+  // zero_division=0) for the binary case exactly. Falls back to the
+  // trained result unchanged for regression/clustering, multiclass (no
+  // single cutoff applies), and any older cached history entry from before
+  // this fix that doesn't carry those two fields.
+  const displayedResult = useMemo(() => {
+    const probaPos = activeResult?.threshold_proba
+    const yTrue = activeResult?.threshold_y_true
+    if (!activeResult || activeResult.task_type !== 'classification' || !probaPos || !yTrue || probaPos.length !== yTrue.length) {
+      return activeResult
+    }
+    const n = probaPos.length
+    let tn = 0, fp = 0, fn = 0, tp = 0
+    for (let i = 0; i < n; i++) {
+      const t = yTrue[i], p = probaPos[i] >= threshold ? 1 : 0
+      if (t === 0 && p === 0) tn++
+      else if (t === 0 && p === 1) fp++
+      else if (t === 1 && p === 0) fn++
+      else tp++
+    }
+    const classNames = activeResult.class_names || ['0', '1']
+    const perClass = (cls, idx) => {
+      const support = idx === 0 ? tn + fp : fn + tp
+      const predictedCount = idx === 0 ? tn + fn : fp + tp
+      const truePositive = idx === 0 ? tn : tp
+      const precision = predictedCount > 0 ? truePositive / predictedCount : 0
+      const recall = support > 0 ? truePositive / support : 0
+      const f1 = (precision + recall) > 0 ? 2 * precision * recall / (precision + recall) : 0
+      return { class: cls, precision, recall, f1, support }
+    }
+    const c0 = perClass(classNames[0], 0)
+    const c1 = perClass(classNames[1], 1)
+    const round5 = v => Math.round(v * 1e5) / 1e5
+    const updated = {
+      ...activeResult,
+      accuracy:  round5(n > 0 ? (tp + tn) / n : 0),
+      precision: round5(n > 0 ? (c0.precision * c0.support + c1.precision * c1.support) / n : 0),
+      recall:    round5(n > 0 ? (c0.recall * c0.support + c1.recall * c1.support) / n : 0),
+      f1:        round5(n > 0 ? (c0.f1 * c0.support + c1.f1 * c1.support) / n : 0),
+    }
+    if (activeResult.confusion_matrix) updated.confusion_matrix = [[tn, fp], [fn, tp]]
+    if (activeResult.per_class) updated.per_class = [
+      { ...c0, precision: round5(c0.precision), recall: round5(c0.recall), f1: round5(c0.f1) },
+      { ...c1, precision: round5(c1.precision), recall: round5(c1.recall), f1: round5(c1.f1) },
+    ]
+    return updated
+  }, [activeResult, threshold])
+
   if (!filePath) {
     return (
       <div style={{ background: C.bg, minHeight: '100vh' }}>
@@ -1510,15 +1778,18 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
       <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
 
         {/* ══════════════════ LEFT PANEL — settings ══════════════════ */}
-        {/* No scroll on this outer panel by design — everything above Model
-            History (model/metric, split, grid search, threshold, train
-            button) must always stay fully visible without scrolling; only
-            the Model History list below scrolls internally once it grows
-            past its own cap. See that section's own comment. */}
+        {/* Classification/regression: the whole panel scrolls as one column
+            (Grid Search CV + Decision Threshold pushed this past what
+            reliably fits without scrolling on shorter viewports) - Model
+            History just grows with it instead of getting its own separate
+            inner scroll region. Clustering keeps the older layout (no
+            scroll on this panel, only Model History scrolls internally) -
+            its settings are short enough that it never needed this. */}
         <div style={{
           width: '34%', minWidth: 340, maxWidth: 460, flexShrink: 0,
           minHeight: 0, display: 'flex', flexDirection: 'column',
           borderRight: `1px solid ${C.border}`, padding: '20px 20px 40px', background: C.card,
+          overflowY: taskType !== 'clustering' ? 'auto' : 'visible',
         }}>
           {/* Model + Metric row */}
           <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
@@ -1691,15 +1962,17 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                       <div key={i} style={{ position: 'relative', padding: '6px 18px 6px 7px', background: C.faint, borderRadius: 7 }}>
                         <button onClick={() => removeGridParam(i)} title="Remove"
                           style={{ position: 'absolute', top: 3, right: 4, border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: 0 }}>✕</button>
-                        {p.custom ? (
-                          <input placeholder="param name" value={p.name} onChange={e => updateGridParam(i, { name: e.target.value })}
-                            style={{ width: '100%', fontSize: 10.5, border: 'none', background: 'transparent', color: C.text, fontWeight: 700 }} />
-                        ) : (
-                          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.label}</div>
-                        )}
-                        <input placeholder="v1, v2" defaultValue={p.values.join(', ')}
-                          onBlur={e => updateGridParam(i, { values: e.target.value.split(',').map(s => s.trim()).filter(Boolean).map(v => (isNaN(v) ? v : Number(v))) })}
-                          style={{ width: '100%', fontSize: 10, border: 'none', background: 'transparent', color: C.muted, marginTop: 1 }} />
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.label || p.name}</div>
+                        {/* Clicking the values re-opens the same
+                            checkbox-picker used to add them - no free-text
+                            editing of values either. */}
+                        <button ref={el => { valuePillRefs.current[i] = el }} onClick={() => openValuePickerForExisting(i)}
+                          title="Choose values" style={{
+                            display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: 0,
+                            fontSize: 10, color: C.primary, marginTop: 1, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                          {p.values.join(', ') || 'choose values…'}
+                        </button>
                         {p.best !== null && p.best !== undefined && (
                           <div style={{ fontSize: 9.5, color: C.success, fontWeight: 700, marginTop: 2 }}>✓ {String(p.best)}</div>
                         )}
@@ -1707,15 +1980,17 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                     ))}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <button onClick={addGridParam} style={smallBtnStyle(C, false)}>＋</button>
+                    <button ref={addParamBtnRef} onClick={openParamPicker} style={smallBtnStyle(C, false)}>＋</button>
                     <button onClick={runGridSearch} disabled={gridSearchLoading || !gridParams.length}
                       style={{ ...smallBtnStyle(C, true), flex: 1, opacity: gridSearchLoading || !gridParams.length ? 0.55 : 1 }}>
                       {gridSearchLoading ? '⏳ Searching…' : '🔍 Search'}
                     </button>
                     <button onClick={applyGridSearch} disabled={!gridSearchResult}
-                      style={{ ...smallBtnStyle(C, false), background: gridSearchResult ? C.successSoft : C.faint,
-                        color: gridSearchResult ? C.success : C.muted, borderColor: gridSearchResult ? C.success : C.border,
-                        opacity: gridSearchResult ? 1 : 0.55 }}>Apply</button>
+                      style={{ ...smallBtnStyle(C, false), background: gridApplyFlash ? C.success : gridSearchResult ? C.successSoft : C.faint,
+                        color: gridApplyFlash ? 'white' : gridSearchResult ? C.success : C.muted, borderColor: gridSearchResult ? C.success : C.border,
+                        opacity: gridSearchResult ? 1 : 0.55, transition: 'background 0.15s, color 0.15s' }}>
+                      {gridApplyFlash ? '✓ Applied' : 'Apply'}
+                    </button>
                   </div>
                   {gridError && <div style={{ fontSize: 11, color: C.danger, marginTop: 6 }}>{gridError}</div>}
                   {gridSearchResult && (
@@ -1740,13 +2015,28 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                 { label: 'Default & Effect', desc: 'Default: 50%.\nLower threshold → more positives flagged → higher Recall, lower Precision.\nHigher threshold → fewer positives flagged → higher Precision, lower Recall.' },
                 { label: 'Example', desc: 'Lower it for cancer screening (catching a real case matters more than a false alarm). Raise it for fraud alerts (avoid annoying legitimate customers).' },
               ]} />}>Decision Threshold</SectionLabel>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <input type="range" min={0.01} max={0.99} step={0.01} value={threshold}
-                  onChange={e => setThreshold(Number(e.target.value))} style={{ flex: 1 }} />
+              {/* Always visible (not just buried in the ⓘ popup) so a
+                  multiclass result never looks like a silently broken
+                  slider - swaps to a more specific, ✕-marked line once a
+                  trained result actually confirms >2 classes, or an amber
+                  note if the model's own probabilities are all-or-nothing
+                  (Decision Tree's default behavior - see
+                  isThresholdDegenerate above). */}
+              <div style={{ fontSize: 10.5, color: isThresholdInapplicable ? C.danger : isThresholdDegenerate ? C.warning : C.muted, marginBottom: 6 }}>
+                {isThresholdInapplicable
+                  ? `✕ Not applied — this model has ${activeResult.class_names.length} classes (threshold only works for binary/2-class models).`
+                  : isThresholdDegenerate
+                  ? '⚠ This model is 0% or 100% confident on every prediction (decision trees fully split by default), so most threshold values won\'t change the result.'
+                  : 'Only affects binary (2-class) classification.'}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: isThresholdInapplicable ? 0.45 : 1 }}>
+                <input type="range" min={0.01} max={0.99} step={0.01} value={threshold} disabled={isThresholdInapplicable}
+                  onChange={e => setThreshold(Number(e.target.value))} style={{ flex: 1, cursor: isThresholdInapplicable ? 'not-allowed' : 'pointer' }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <input type="number" min={1} max={99} value={Math.round(threshold * 100)}
+                  <input type="number" min={1} max={99} value={Math.round(threshold * 100)} disabled={isThresholdInapplicable}
                     onChange={e => setThreshold(Math.min(99, Math.max(1, Number(e.target.value))) / 100)}
-                    style={{ width: 44, padding: '4px 6px', borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text, textAlign: 'center' }} />
+                    style={{ width: 44, padding: '4px 6px', borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text,
+                      textAlign: 'center', cursor: isThresholdInapplicable ? 'not-allowed' : 'text' }} />
                   <span style={{ fontSize: 12, color: C.muted }}>%</span>
                 </div>
               </div>
@@ -1767,12 +2057,25 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           </button>
           {trainingError && <div style={{ fontSize: 11.5, color: C.danger, marginTop: 8 }}>⚠ {trainingError}</div>}
 
-          {/* Model History — only THIS section scrolls (capped height), not
-              the whole left panel, so the settings above it never move out
-              of view while scrolling a long history list. */}
-          <div style={{ marginTop: 26, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+          {/* Model History. For clustering (outer panel doesn't scroll -
+              see above) this is the one thing in the panel that scrolls
+              internally, so its wrapper/inner list use flex:1/minHeight:0
+              (not a fixed maxHeight) to always extend to the panel's own
+              bottom. For classification/regression the OUTER panel now
+              scrolls as a whole, so this just grows naturally with its
+              content instead of getting its own separate inner scrollbar -
+              two independent scroll regions stacked on each other reads as
+              broken, not helpful. The ⋮ menu itself is rendered once at
+              the page root (see historyMenuOpen below) instead of nested in
+              this box, since a nested position:absolute popup still gets
+              clipped by an ancestor's overflow:auto no matter its z-index. */}
+          <div style={taskType === 'clustering'
+            ? { marginTop: 26, paddingTop: 14, borderTop: `1px solid ${C.border}`, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+            : { marginTop: 26, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
             <SectionLabel>Model History</SectionLabel>
-            <div style={{ maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
+            <div style={taskType === 'clustering'
+              ? { flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }
+              : {}}>
             {modelHistory.length === 0 ? (
               <div style={{ fontSize: 11.5, color: C.muted, padding: '8px 0' }}>No models trained yet this session.</div>
             ) : (
@@ -1791,17 +2094,10 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                     {m.task_type === 'clustering' ? `k=${m.n_clusters}`
                       : m[m.metric] != null ? `${m.metric}: ${m.task_type === 'classification' ? pct(m[m.metric]) : m[m.metric]}` : ''}
                   </span>
-                  <button onClick={e => { e.stopPropagation(); setHistoryMenuOpen(historyMenuOpen === m.model_id ? null : m.model_id) }}
-                    style={{ border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, position: 'relative' }}>
+                  <button ref={el => { historyMenuBtnRefs.current[m.model_id] = el }}
+                    onClick={e => { e.stopPropagation(); setHistoryMenuOpen(historyMenuOpen === m.model_id ? null : m.model_id) }}
+                    style={{ border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 13 }}>
                     ⋮
-                    {historyMenuOpen === m.model_id && (
-                      <ModelActionsMenu entry={m}
-                        onView={() => setActiveResult(m)}
-                        onDownload={() => downloadModel(m)}
-                        onVisualizeTree={() => setTreePopupEntry(m)}
-                        onDelete={() => { setModelHistory(h => h.filter(x => x.model_id !== m.model_id)); if (activeResult?.model_id === m.model_id) setActiveResult(null) }}
-                        onClose={() => setHistoryMenuOpen(null)} />
-                    )}
                   </button>
                 </div>
               ))
@@ -1864,7 +2160,7 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           )}
 
           {activeResult && (
-            <TrainingResults result={activeResult} outputOptions={outputOptions}
+            <TrainingResults result={displayedResult} outputOptions={outputOptions}
               onEditOutput={() => setShowEditOutput(true)} threshold={threshold} />
           )}
         </div>
@@ -1888,6 +2184,33 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
             Continue to Feature Importance →
           </button>
         </div>
+      )}
+
+      {historyMenuOpen && modelHistory.find(m => m.model_id === historyMenuOpen) && (
+        <ModelActionsMenu entry={modelHistory.find(m => m.model_id === historyMenuOpen)}
+          pos={historyMenuPos} popupRef={historyMenuPopupRef}
+          onView={() => setActiveResult(modelHistory.find(m => m.model_id === historyMenuOpen))}
+          onDownload={() => downloadModel(modelHistory.find(m => m.model_id === historyMenuOpen))}
+          onVisualizeTree={() => setTreePopupEntry(modelHistory.find(m => m.model_id === historyMenuOpen))}
+          onDelete={() => {
+            setModelHistory(h => h.filter(x => x.model_id !== historyMenuOpen))
+            if (activeResult?.model_id === historyMenuOpen) setActiveResult(null)
+          }}
+          onClose={() => setHistoryMenuOpen(null)} />
+      )}
+
+      {paramPickerOpen && (
+        <GridParamPickerPopup
+          options={(MODEL_PARAM_DEFS[selectedModel] || []).filter(d => !gridParams.some(g => g.name === d.name))}
+          pos={paramPickerPos} popupRef={paramPickerPopupRef}
+          onPick={pickParam} onClose={() => setParamPickerOpen(false)} />
+      )}
+
+      {valuePicker && (
+        <GridValuePickerPopup
+          def={valuePicker.def} checked={valuePicker.checked} candidates={candidateValuesFor(valuePicker.def)}
+          pos={valuePickerPos} popupRef={valuePickerPopupRef}
+          onToggle={toggleValuePickerChecked} onSave={saveValuePicker} onClose={() => setValuePicker(null)} />
       )}
 
       {showEditParams && (

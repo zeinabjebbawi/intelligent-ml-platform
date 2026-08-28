@@ -422,7 +422,7 @@ const RedundancyRelevanceChart = ({ data, expanded = false }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // TOP 2 FEATURES SCATTER
 // ─────────────────────────────────────────────────────────────────────────────
-const TopTwoScatter = ({ top2 }) => {
+const TopTwoScatter = ({ top2, isRegression }) => {
   const { C } = useTheme()
   if (!top2?.scatter?.length || !top2.feature_1 || !top2.feature_2) return null
   const classes = [...new Set(top2.scatter.map(p => p.target))]
@@ -448,7 +448,15 @@ const TopTwoScatter = ({ top2 }) => {
           ))}
         </ScatterChart>
       </ResponsiveContainer>
-      <div style={{ display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
+      {/* Regression targets are continuous, so `classes` here is every
+          distinct value in the sample (often dozens) rather than a handful
+          of real class labels - capping height + scrolling internally
+          keeps that from pushing the rest of the page down, without
+          touching the classification legend (already a short, flat wrap
+          list) or the coloring/dot logic itself. */}
+      <div style={isRegression
+        ? { display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap', maxHeight: 90, overflowY: 'auto', paddingRight: 4 }
+        : { display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
         {classes.map((cls, ci) => (
           <div key={cls} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
             <div style={{ width: 10, height: 10, borderRadius: '50%', background: CLASS_COLORS[ci % CLASS_COLORS.length] }} />
@@ -1202,7 +1210,7 @@ export default function FeatureSelectionPage({
 
                 <ChartCard title={data.top_2?.feature_1 ? `Top 2 Features: ${data.top_2.feature_1} × ${data.top_2.feature_2}` : 'Top 2 Features'}
                   sub="Scatter of the two most important numeric features, colored by target class. Good separation = high predictive value.">
-                  <TopTwoScatter top2={data.top_2} />
+                  <TopTwoScatter top2={data.top_2} isRegression={projectData?.taskType === 'regression'} />
                 </ChartCard>
               </>
             ) : (
