@@ -430,6 +430,7 @@ METHOD_LABELS = {
 class ProfileReq(BaseModel):
     file_path:     str
     target_column: Optional[str] = None
+    task_type:     Optional[str] = None
 
 class RunSamplingReq(BaseModel):
     file_path:       str
@@ -441,6 +442,7 @@ class RunSamplingReq(BaseModel):
     sample_pct:      float = 20.0   # used for simple_random / stratified / systematic / importance
     stratify_col:    Optional[str] = None
     target_col:      Optional[str] = None
+    task_type:       Optional[str] = None
     shuffle:         bool  = True
     n_clusters:      Optional[int] = None
     reservoir_size:  Optional[int] = None
@@ -461,7 +463,14 @@ def profile_dataset(req: ProfileReq):
     try:
         df = read_df(req.file_path)
 
-        target_col = req.target_column or auto_detect_target(df)
+        # Clustering has no target column, deliberately - auto_detect_target
+        # is a heuristic for classification/regression datasets that fell
+        # through here with an empty target_column, not a signal to invent
+        # one for an intentionally unsupervised dataset. Without this check,
+        # every clustering project got a "Target Column" banner (skewness/
+        # kurtosis stats and all) for a column the user never chose, which
+        # reads as a real target when there isn't one.
+        target_col = None if req.task_type == "clustering" else (req.target_column or auto_detect_target(df))
 
         skewed_cols  = get_skewness_summary(df)
         n_right_skew = sum(1 for c in skewed_cols if c["direction"] == "right")
@@ -538,7 +547,10 @@ def run_sampling(req: RunSamplingReq):
                               date_column=req.date_column, start_date=req.start_date,
                               end_date=req.end_date, step_size=req.step_size)
 
-        target_col = req.target_col or req.stratify_col or auto_detect_target(df)
+        # Same reasoning as /profile above - clustering has no target,
+        # deliberately, so don't fabricate a before/after "class balance"
+        # comparison for one auto_detect_target guessed on its own.
+        target_col = None if req.task_type == "clustering" else (req.target_col or req.stratify_col or auto_detect_target(df))
 
         before_dist = get_class_dist(df[target_col]) if target_col and target_col in df.columns else []
         after_dist  = get_class_dist(sampled[target_col]) if target_col and target_col in sampled.columns else []

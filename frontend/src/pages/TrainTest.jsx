@@ -167,19 +167,24 @@ const GRID_SEARCH_DEFAULTS = {
   random_forest:            [{ name: 'n_estimators', label: 'Number of trees', values: [50, 100, 200] },
                               { name: 'max_depth', label: 'Max depth', values: [3, 5, 10] },
                               { name: 'min_samples_split', label: 'Min samples split', values: [2, 5] }],
+  // Every `label` below is the FALLBACK used only when MODEL_PARAM_DEFS
+  // (further down) has no entry for that `name` - resolveParamLabel always
+  // prefers MODEL_PARAM_DEFS's own label when one exists, so these are kept
+  // matching it exactly to avoid the false impression that changing one
+  // here would change what's actually displayed for a shared `name`.
   logistic_regression:      [{ name: 'max_iter', label: 'Max iterations', values: [100, 500] },
-                              { name: 'penalty', label: 'Regularization', values: ['l2', 'l1'] },
+                              { name: 'penalty', label: 'Penalty', values: ['l2', 'l1'] },
                               { name: 'solver', label: 'Solver', values: ['lbfgs', 'liblinear'] }],
   svm:                      [{ name: 'kernel', label: 'Kernel', values: ['linear', 'rbf', 'poly'] },
                               { name: 'C', label: 'C (regularization)', values: [0.1, 1.0, 10.0] },
-                              { name: 'gamma', label: 'Gamma (RBF/poly)', values: ['scale', 'auto'] }],
+                              { name: 'gamma', label: 'Gamma', values: ['scale', 'auto'] }],
   xgboost:                  [{ name: 'learning_rate', label: 'Learning rate', values: [0.01, 0.1] },
                               { name: 'max_depth', label: 'Max depth', values: [3, 5, 7] },
-                              { name: 'n_estimators', label: 'Number of trees', values: [50, 100] },
+                              { name: 'n_estimators', label: 'Estimators', values: [50, 100] },
                               { name: 'subsample', label: 'Subsample ratio', values: [0.8, 1.0] }],
   naive_bayes:              [],
   linear_regression:        [],
-  ridge_regression:         [{ name: 'alpha', label: 'Alpha (regularization)', values: [0.1, 1.0, 10.0] }],
+  ridge_regression:         [{ name: 'alpha', label: 'Alpha', values: [0.1, 1.0, 10.0] }],
   random_forest_regressor:  [{ name: 'n_estimators', label: 'Number of trees', values: [50, 100, 200] },
                               { name: 'max_depth', label: 'Max depth', values: [3, 5, 10] }],
   kmeans:                   [{ name: 'max_iter', label: 'Max iterations', values: [100, 300] }],
@@ -274,6 +279,27 @@ const MODEL_PARAM_DEFS = {
     { name: 'random_state', label: 'Random state', type: 'number', default: 42 },
   ],
 }
+
+// GRID_SEARCH_DEFAULTS above carries its own hand-typed `label` per entry,
+// independent of MODEL_PARAM_DEFS's own label for the SAME `name` - the two
+// lists drifting apart is exactly how logistic_regression's grid card ended
+// up calling `penalty` "Regularization" while Edit Attributes separately
+// calls a COMPLETELY DIFFERENT parameter (`C`) "Regularization (C)": two
+// real sklearn hyperparameters, one shared-sounding label, so applying the
+// grid's best `penalty` looked like "the wrong parameter changed" to
+// anyone tracking the C field. MODEL_PARAM_DEFS is the more complete,
+// carefully-curated list (it's what Edit Attributes itself renders), so
+// it's treated as the single source of truth for what a given parameter
+// NAME is called - every grid card label is resolved through here instead
+// of trusting GRID_SEARCH_DEFAULTS's own copy, which makes this exact kind
+// of collision structurally impossible for any model going forward: two
+// different `name`s can never independently drift into confusingly
+// similar text again. Falls back to the GRID_SEARCH_DEFAULTS-provided
+// label only for the rare parameter Edit Attributes deliberately doesn't
+// expose (e.g. decision_tree's `criterion`, which already has its own
+// dedicated toggle elsewhere on the page).
+const resolveParamLabel = (modelId, name, fallbackLabel) =>
+  MODEL_PARAM_DEFS[modelId]?.find(d => d.name === name)?.label || fallbackLabel
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INFO ICON — small circular "i" popovers, placed at the 5 primary
@@ -784,39 +810,15 @@ const zoomBtnStyle = (C) => ({
   background: C.card, color: C.text, fontSize: 12, fontWeight: 600, cursor: 'pointer',
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FEATURE IMPORTANCE / COEFFICIENTS — horizontal bar chart
-// ─────────────────────────────────────────────────────────────────────────────
-const ImportanceBar = ({ data, valueKey, labelKey, title }) => {
-  const { C } = useTheme()
-  if (!data?.length) return null
-  const chartData = [...data].slice(0, 15).map(d => ({ ...d, __abs: Math.abs(d[valueKey]) }))
-  chartData.sort((a, b) => b.__abs - a.__abs)
-  return (
-    <ChartCard title={title}>
-      <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 28)}>
-        <BarChart data={chartData} layout="vertical" margin={{ left: 10, right: 24 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
-          <XAxis type="number" tick={{ fontSize: 10, fill: C.muted }} />
-          <YAxis dataKey={labelKey} type="category" width={110} tick={{ fontSize: 11, fill: C.text }} />
-          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-          <ReferenceLine x={0} stroke={C.border} />
-          <Bar dataKey={valueKey} radius={[0, 4, 4, 0]}>
-            {chartData.map((d, i) => (
-              <Cell key={i} fill={d[valueKey] >= 0 ? C.primary : C.danger} opacity={0.85} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </ChartCard>
-  )
-}
-
 const SigmoidChart = ({ points, threshold }) => {
   const { C } = useTheme()
   if (!points?.length) return null
   return (
-    <ChartCard title="Sigmoid Function" sub="How Logistic Regression converts a raw score into a class probability.">
+    <ChartCard title={<>Sigmoid Function<InfoIcon itemsTitle="Sigmoid Function" items={[
+        { label: 'Why "Regression" but a Classifier?', desc: 'Logistic Regression is a classification algorithm despite the name — it borrows the linear regression score, then squashes it into a 0-1 probability.' },
+        { label: 'What The Curve Shows', desc: 'The raw score (x-axis) is passed through the sigmoid (S-shaped) function, mapping any number to a probability between 0 and 1 (y-axis).' },
+        { label: 'The Threshold Line', desc: 'Marks the current Decision Threshold. Points on the curve above the line are predicted "Positive"; below it, "Negative".' },
+      ]} /></>} sub="How Logistic Regression converts a raw score into a class probability.">
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={points} margin={{ left: -10, right: 10 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={C.faint} />
@@ -890,31 +892,42 @@ const BayesNetworkViz = ({ network }) => {
   if (!network?.features?.length) return null
   const feats = network.features.slice(0, 8)
   const N = feats.length
-  const CX = 160, CY = 200, R = 150
+  // Node radius (26) + margin needs to fit inside the coordinate box on
+  // every side - the previous CX=160/R=150 in a 340-wide box put the
+  // leftmost node's (angle 180°) edge at a NEGATIVE x (160-150-26=-16),
+  // clipping it against the SVG's own bounds, not just an ancestor's
+  // overflow. W/H/CX/CY/R below leave a real margin on every side
+  // instead. Rendered at width="100%" (viewBox-scaled, same responsive
+  // technique as the Simulator SHAP waterfall) and centered in the card
+  // so it actually uses the wide space ChartCard gives it instead of
+  // sitting fixed-size in the top-left corner.
+  const W = 440, H = 380, CX = 220, CY = 190, R = 140
   const maxInfluence = Math.max(...feats.map(f => f.influence), 0.001)
   return (
     <ChartCard title="Feature Influence Network (Naive Bayes)"
       sub="Thicker edge = that feature's mean differs more across classes — the signal Naive Bayes actually relies on.">
-      <svg width={340} height={400}>
-        <circle cx={CX} cy={CY} r={34} fill={C.primary} opacity={0.15} stroke={C.primary} strokeWidth={2} />
-        <text x={CX} y={CY - 4} textAnchor="middle" fontSize={11} fontWeight={800} fill={C.primary}>Class</text>
-        <text x={CX} y={CY + 10} textAnchor="middle" fontSize={8.5} fill={C.muted}>{network.classes?.length || 0} classes</text>
-        {feats.map((f, i) => {
-          const angle = (i / N) * 2 * Math.PI - Math.PI / 2
-          const fx = CX + R * Math.cos(angle), fy = CY + R * Math.sin(angle)
-          const w = 1 + (f.influence / maxInfluence) * 5
-          return (
-            <g key={f.feature}>
-              <line x1={CX} y1={CY} x2={fx} y2={fy} stroke={C.success} strokeWidth={w} opacity={0.5} />
-              <circle cx={fx} cy={fy} r={26} fill={C.successSoft} stroke={C.success} strokeWidth={1.5} />
-              <text x={fx} y={fy - 2} textAnchor="middle" fontSize={9} fontWeight={700} fill={C.text}>
-                {f.feature.length > 9 ? f.feature.slice(0, 8) + '…' : f.feature}
-              </text>
-              <text x={fx} y={fy + 10} textAnchor="middle" fontSize={8} fill={C.muted}>{f.influence}</text>
-            </g>
-          )
-        })}
-      </svg>
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: 560, display: 'block' }}>
+          <circle cx={CX} cy={CY} r={34} fill={C.primary} opacity={0.15} stroke={C.primary} strokeWidth={2} />
+          <text x={CX} y={CY - 4} textAnchor="middle" fontSize={11} fontWeight={800} fill={C.primary}>Class</text>
+          <text x={CX} y={CY + 10} textAnchor="middle" fontSize={8.5} fill={C.muted}>{network.classes?.length || 0} classes</text>
+          {feats.map((f, i) => {
+            const angle = (i / N) * 2 * Math.PI - Math.PI / 2
+            const fx = CX + R * Math.cos(angle), fy = CY + R * Math.sin(angle)
+            const w = 1 + (f.influence / maxInfluence) * 5
+            return (
+              <g key={f.feature}>
+                <line x1={CX} y1={CY} x2={fx} y2={fy} stroke={C.success} strokeWidth={w} opacity={0.5} />
+                <circle cx={fx} cy={fy} r={26} fill={C.successSoft} stroke={C.success} strokeWidth={1.5} />
+                <text x={fx} y={fy - 2} textAnchor="middle" fontSize={9} fontWeight={700} fill={C.text}>
+                  {f.feature.length > 9 ? f.feature.slice(0, 8) + '…' : f.feature}
+                </text>
+                <text x={fx} y={fy + 10} textAnchor="middle" fontSize={8} fill={C.muted}>{f.influence}</text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
     </ChartCard>
   )
 }
@@ -1198,11 +1211,15 @@ const primaryBtnStyle = (C) => ({ padding: '9px 20px', borderRadius: 9, border: 
 const EditOutputPopup = ({ options, onApply, onClose }) => {
   const { C } = useTheme()
   const [local, setLocal] = useState(options)
+  // "Learning curve" removed - there's a dedicated Learning Curve page
+  // right after this one that does this properly (multiple train sizes,
+  // gap analysis); a checkbox here never did anything but claim it would
+  // "rerun the model," which it never actually did (output_options never
+  // included a learning-curve computation on either side of the API).
   const ROWS = [
     ['confusion_matrix', 'Confusion matrix'],
     ['per_class_stats', 'Per-class statistics (precision / recall / F1)'],
-    ['model_summary', 'Model summary'],
-    ['learning_curve', 'Learning curve (slower — reruns the model)'],
+    ['model_summary', 'Model-specific summary (tree / coefficients / feature weights)'],
   ]
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 1000,
@@ -1368,7 +1385,7 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   const [trainingError, setTrainingError] = useState('')
 
   const [outputOptions, setOutputOptions] = useState({
-    confusion_matrix: true, per_class_stats: true, model_summary: true, learning_curve: false,
+    confusion_matrix: true, per_class_stats: true, model_summary: true,
   })
   const [showEditOutput, setShowEditOutput] = useState(false)
 
@@ -1486,7 +1503,7 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   const didMountModelEffect = useRef(false)
   useEffect(() => {
     if (!didMountModelEffect.current) { didMountModelEffect.current = true; return }
-    setGridParams((GRID_SEARCH_DEFAULTS[selectedModel] || []).map(p => ({ ...p, best: null })))
+    setGridParams((GRID_SEARCH_DEFAULTS[selectedModel] || []).map(p => ({ ...p, label: resolveParamLabel(selectedModel, p.name, p.label), best: null })))
     setGridSearchResult(null)
     setModelParams({})
   }, [selectedModel])
@@ -1903,11 +1920,18 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                   <input type="number" min={2} max={20} value={cvFolds} onChange={e => setCvFolds(Number(e.target.value))}
                     style={{ width: 54, padding: '4px 8px', borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
                   {taskType === 'classification' && (
-                    <select value={stratified ? 'strat' : 'notstrat'} onChange={e => setStratified(e.target.value === 'strat')}
-                      style={{ ...selectStyle(C), flex: 1 }}>
-                      <option value="strat">Stratified</option>
-                      <option value="notstrat">Not Stratified</option>
-                    </select>
+                    <>
+                      <select value={stratified ? 'strat' : 'notstrat'} onChange={e => setStratified(e.target.value === 'strat')}
+                        style={{ ...selectStyle(C), flex: 1 }}>
+                        <option value="strat">Stratified</option>
+                        <option value="notstrat">Not Stratified</option>
+                      </select>
+                      <span style={{
+                        flexShrink: 0, fontSize: 9.5, fontWeight: 800,
+                        padding: '2px 8px', borderRadius: 20, background: C.successSoft, color: C.success,
+                        textTransform: 'uppercase', letterSpacing: 0.4, whiteSpace: 'nowrap',
+                      }}>✓ Stratified Rec.</span>
+                    </>
                   )}
                 </div>
               )}
@@ -1962,7 +1986,11 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
                       <div key={i} style={{ position: 'relative', padding: '6px 18px 6px 7px', background: C.faint, borderRadius: 7 }}>
                         <button onClick={() => removeGridParam(i)} title="Remove"
                           style={{ position: 'absolute', top: 3, right: 4, border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: 0 }}>✕</button>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.label || p.name}</div>
+                        {/* Re-resolved through the same canonical lookup at
+                            render time (not just when the card is first
+                            seeded) so a stale label restored from an older
+                            localStorage snapshot can't linger either. */}
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{resolveParamLabel(selectedModel, p.name, p.label || p.name)}</div>
                         {/* Clicking the values re-opens the same
                             checkbox-picker used to add them - no free-text
                             editing of values either. */}
@@ -2375,14 +2403,23 @@ function TrainingResults({ result, outputOptions, onEditOutput, threshold }) {
         </ChartCard>
       )}
 
-      {/* ── Model-specific visualization — always last ─────────────────── */}
-      {viz.tree && <ChartCard title="Decision Tree"><DecisionTreeViz tree={viz.tree} /></ChartCard>}
-      {viz.feature_importance && <ImportanceBar data={viz.feature_importance} valueKey="importance" labelKey="feature" title="Feature Importance" />}
-      {viz.sigmoid_curve && <SigmoidChart points={viz.sigmoid_curve} threshold={threshold} />}
-      {viz.coefficients && !viz.sigmoid_curve && <CoefficientsTable coefficients={viz.coefficients} intercept={viz.intercept} />}
-      {viz.coefficients && viz.sigmoid_curve && <CoefficientsTable coefficients={viz.coefficients} />}
       {result.regression_scatter && <RegressionScatterChart scatter={result.regression_scatter} />}
-      {viz.bayes_network && <BayesNetworkViz network={viz.bayes_network} />}
+
+      {/* ── Model-specific visualization — always last, gated by the
+          "Model-specific summary" Edit Output toggle. Feature Importance
+          is deliberately never shown here (removed on request) - the
+          Feature Importance page right after this one already covers it
+          properly, per model type, with its own dedicated explanations;
+          a bare bar chart here duplicated that with none of the context. ── */}
+      {outputOptions.model_summary && (
+        <>
+          {viz.tree && <ChartCard title="Decision Tree"><DecisionTreeViz tree={viz.tree} /></ChartCard>}
+          {viz.sigmoid_curve && <SigmoidChart points={viz.sigmoid_curve} threshold={threshold} />}
+          {viz.coefficients && !viz.sigmoid_curve && <CoefficientsTable coefficients={viz.coefficients} intercept={viz.intercept} />}
+          {viz.coefficients && viz.sigmoid_curve && <CoefficientsTable coefficients={viz.coefficients} />}
+          {viz.bayes_network && <BayesNetworkViz network={viz.bayes_network} />}
+        </>
+      )}
     </div>
   )
 }

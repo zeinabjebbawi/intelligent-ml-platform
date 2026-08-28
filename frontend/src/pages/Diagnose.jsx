@@ -177,7 +177,7 @@ function classBalance(col, rows) {
 
 // Level-2 rule-based per-column issue detector (Global Rule 1). Everything it
 // looks at comes from this page's own loaded data (Global Rule 2).
-function detectColumnIssue(col, stats, colLower) {
+function detectColumnIssue(col, stats, colLower, taskType) {
   const { type, missing, missingPct, unique, total } = stats
 
   if (unique === 1 && total > 0) {
@@ -247,7 +247,19 @@ function detectColumnIssue(col, stats, colLower) {
   if (type === 'categorical' && unique >= 2 && unique <= 8) {
     const majorityPct = stats.mostCommonPct
     if (majorityPct > 70) {
-      return {
+      // This check runs on ANY categorical column, not necessarily a
+      // designated target - for clustering there's no target/model-accuracy
+      // concept at all ("class" implies a supervised label), so the
+      // wording is relabeled instead of claiming a model would predict a
+      // "majority class" that doesn't exist here. The underlying fact
+      // (one category dominates this feature) is still worth flagging for
+      // clustering too - a dominant category can skew distance-based
+      // clustering - so this stays a real issue, just correctly described.
+      return taskType === 'clustering' ? {
+        severity: 'warning', label: 'SKEWED CATEGORY', title: 'Skewed Category',
+        explanation: `"${stats.mostCommon}" makes up ${majorityPct}% of "${col}". A category this dominant contributes little separating signal and can skew distance-based clustering toward it — consider whether this column should be excluded or reweighted.`,
+        actions: [],
+      } : {
         severity: 'warning', label: 'CLASS IMBALANCE', title: 'Class Imbalance',
         explanation: `"${stats.mostCommon}" makes up ${majorityPct}% of "${col}". A model can reach high accuracy by just predicting the majority class — consider stratified sampling or class weighting at training time.`,
         actions: [],
@@ -783,10 +795,10 @@ function DistributionPanel({ C, info }) {
   )
 }
 
-function DiagnoseCard({ C, selectedColumns, columns, columnsInfo, rows, statusProps, onAction }) {
+function DiagnoseCard({ C, selectedColumns, columns, columnsInfo, rows, statusProps, onAction, taskType }) {
   const single = selectedColumns.length === 1 ? selectedColumns[0] : null
   const singleInfo = single ? columnsInfo[single] : null
-  const singleIssue = single ? detectColumnIssue(single, singleInfo, single.toLowerCase()) : null
+  const singleIssue = single ? detectColumnIssue(single, singleInfo, single.toLowerCase(), taskType) : null
 
   const compactBody = () => {
     if (selectedColumns.length === 0) return (
@@ -1707,7 +1719,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData,
             onRenameColumn={renameColumn}
             dirtyCells={dirtyCells} onCellCommit={commitCell} onAddRow={addRow} modifiedCount={modifiedCount} />
           <DiagnoseCard C={C} selectedColumns={selectedColumns} columns={activeColumns}
-            columnsInfo={columnsInfo} rows={rows} onAction={applyColumnAction}
+            columnsInfo={columnsInfo} rows={rows} onAction={applyColumnAction} taskType={projectData?.taskType}
             statusProps={{ rowCount: rows.length, colCount: activeColumns.length, health, missingPct, outlierTotal, dupCount }} />
         </div>
 

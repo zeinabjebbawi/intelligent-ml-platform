@@ -36,7 +36,7 @@
  * block), so there's still exactly one Continue button, just correctly
  * positioned now.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   Cell, ResponsiveContainer, ReferenceLine,
@@ -46,7 +46,7 @@ import {
 } from 'recharts'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
-import { getBalanceLevelConfig } from '../constants/balanceLevels'
+import { getBalanceLevelConfig, getSkewLevelConfig } from '../constants/balanceLevels'
 import VersionsBar from '../components/VersionsBar'
 
 const shadow  = '0 4px 24px rgba(0,0,0,0.07)'
@@ -64,6 +64,98 @@ const callViz = async (endpoint, body) => {
   })
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Error ${res.status}`) }
   return res.json()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INFO ICON — same dual-mode ⓘ popover already used across Train and Test /
+// Feature Importance / Learning Curve / Simulator (bold multi-column `items`
+// list, or a plain `content` paragraph for a short explanation). Ported
+// verbatim rather than shared from one file, matching how each of those
+// pages already carries its own copy - `items`/`content`, fixed-position +
+// viewport-clamped on open, same visual language everywhere in the app.
+// ─────────────────────────────────────────────────────────────────────────────
+const WIDE_POPUP_W = 560
+const NARROW_POPUP_W = 300
+
+const InfoIcon = ({ content, items, itemsTitle, footer, width }) => {
+  const { C } = useTheme()
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const popupRef = useRef(null)
+  const isWide = !!items
+  const popupW = width || (isWide ? WIDE_POPUP_W : NARROW_POPUP_W)
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    const w = popupRef.current?.offsetWidth || popupW
+    const h = popupRef.current?.offsetHeight || 0
+    const left = Math.max(12, Math.min(r.right + 8, window.innerWidth - w - 12))
+    const top  = Math.max(12, Math.min(r.top - 6, window.innerHeight - h - 12))
+    setPos({ left, top })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  return (
+    <span style={{ position: 'relative', display: 'inline-block' }}>
+      <button ref={btnRef} onClick={() => setOpen(o => !o)} title="Learn more"
+        style={{
+          width: 18, height: 18, border: 'none', background: 'none', padding: 0,
+          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          marginLeft: 6, flexShrink: 0, lineHeight: 1, transition: 'all 0.15s',
+        }}>
+        <svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="7.25" fill={open ? C.primary : C.primarySoft} stroke={C.primary} strokeWidth="1.5" />
+          <circle cx="9" cy="5.7" r="1.05" fill={open ? '#fff' : C.primary} />
+          <rect x="8.15" y="8.1" width="1.7" height="5" rx="0.85" fill={open ? '#fff' : C.primary} />
+        </svg>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
+          {isWide ? (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '16px 20px', width: popupW, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow,
+              fontSize: 12, color: C.text,
+              fontWeight: 400, textTransform: 'none', letterSpacing: 'normal',
+            }}>
+              {itemsTitle && (
+                <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: 'uppercase',
+                  letterSpacing: 1, marginBottom: 12 }}>{itemsTitle}</div>
+              )}
+              <div style={{ columns: '2 230px', columnGap: 22 }}>
+                {items.map(it => (
+                  <div key={it.label} style={{ breakInside: 'avoid', marginBottom: 13 }}>
+                    <div style={{ fontWeight: 800, fontSize: 12.5, color: C.text, marginBottom: 3 }}>{it.label}</div>
+                    <div style={{ fontWeight: 400, fontSize: 11.5, color: C.muted, lineHeight: 1.55, whiteSpace: 'pre-line' }}>{it.desc}</div>
+                  </div>
+                ))}
+              </div>
+              {footer && (
+                <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px dashed ${C.border}`,
+                  fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: 1.6 }}>{footer}</div>
+              )}
+            </div>
+          ) : (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '14px 16px', width: popupW, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow, fontSize: 12,
+              color: C.text, lineHeight: 1.65, whiteSpace: 'pre-line',
+              fontWeight: 400, textTransform: 'none', letterSpacing: 'normal',
+            }}>
+              {content}
+            </div>
+          )}
+        </>
+      )}
+    </span>
+  )
 }
 
 const CLASS_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
@@ -168,11 +260,16 @@ const ChartCard = ({ title, sub, children, action, style: extraStyle }) => {
 // feature-selection concern (it's still shown, correctly, in Feature
 // Selection's own correlation ranking), not a general readiness axis.
 // ─────────────────────────────────────────────────────────────────────────────
-const DataFingerprint = ({ scores, isClustering }) => {
+const DataFingerprint = ({ scores, isClustering, isRegression }) => {
   const { C } = useTheme()
+  // The underlying score is still meaningful for regression (it's the same
+  // skew-derived "how well distributed" number the Target Skew card shows
+  // as a percentage), so unlike clustering the axis itself stays - only the
+  // WORD changes, since "Balance" implies classes a continuous target
+  // doesn't have.
   const ALL_AXES = [
     { key: 'completeness', label: 'Completeness' },
-    { key: 'balance',      label: 'Balance' },
+    { key: 'balance',      label: isRegression ? 'Skew' : 'Balance' },
     { key: 'normality',    label: 'Normality' },
     { key: 'separability', label: 'Separability' },
     { key: 'cleanliness',  label: 'Cleanliness' },
@@ -256,7 +353,9 @@ const DataFingerprint = ({ scores, isClustering }) => {
         </div>
         {[
           ['Completeness', 'Fraction of non-null values across all columns'],
-          ...(isClustering ? [] : [['Balance', 'How evenly the target classes are distributed']]),
+          ...(isClustering ? [] : [isRegression
+            ? ['Skew', 'How symmetric the target\'s distribution is (low skew = ML-ready)']
+            : ['Balance', 'How evenly the target classes are distributed']]),
           ['Normality',    '% of features with |skewness| < 1'],
           ['Separability', 'Class separation score (from PCA — load below)'],
           ['Cleanliness',  '% of rows free from IQR-detected outliers'],
@@ -664,6 +763,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   // upstream step actually ran) without hardcoding a specific step name.
   const filePath = getDisplayPath ? getDisplayPath('data_readiness') : projectData?.filePath
   const isClustering = projectData?.taskType === 'clustering'
+  const isRegression = projectData?.taskType === 'regression'
 
   // The true original upload — for every "before vs after" comparison —
   // read directly from the version array rather than requiring a caller to
@@ -828,11 +928,16 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
               utils/balance_checker.py + constants/balanceLevels.js) — a
               dataset gets one consistent balance judgment across the whole
               app, not a second, independently-bucketed opinion here. */}
-          <MetricCard icon="⚖" label={targetQuality?.is_classification === false ? 'Target Skew' : 'Class Balance'}
-            value={targetQuality ? getBalanceLevelConfig(C)[targetQuality.level]?.label : 'No Target'}
-            accent={targetQuality ? getBalanceLevelConfig(C)[targetQuality.level]?.color : C.muted}
+          <MetricCard icon="⚖" label={isClustering ? 'Class Balance' : targetQuality?.is_classification === false ? 'Target Skew' : 'Class Balance'}
+            value={isClustering ? getBalanceLevelConfig(C).clustering.label
+              : !targetQuality ? 'No Target'
+              : (targetQuality.is_classification === false ? getSkewLevelConfig(C) : getBalanceLevelConfig(C))[targetQuality.level]?.label}
+            accent={isClustering ? getBalanceLevelConfig(C).clustering.color
+              : !targetQuality ? C.muted
+              : (targetQuality.is_classification === false ? getSkewLevelConfig(C) : getBalanceLevelConfig(C))[targetQuality.level]?.color}
             sub={
-              !targetQuality ? 'No target set'
+              isClustering ? 'Not applicable — clustering has no target to balance'
+              : !targetQuality ? 'No target set'
               : targetQuality.is_classification === false ? `skew ${targetQuality.skewness?.toFixed(2)}`
               : current.class_dist?.length > 0 ? current.class_dist.map(d => `${d.class}: ${d.pct}%`).join(' / ') : ''
             } />
@@ -854,7 +959,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
           label="Summary"
           sub={`Your dataset quality across ${isClustering ? 4 : 5} ML-readiness dimensions`}>
           <ChartCard style={{ padding: '28px 32px' }}>
-            <DataFingerprint scores={fingerprint || {}} isClustering={isClustering} />
+            <DataFingerprint scores={fingerprint || {}} isClustering={isClustering} isRegression={isRegression} />
           </ChartCard>
         </Section>
 
@@ -993,8 +1098,13 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
                 {pcaData.silhouette > 0 && (
                   <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                     <div style={{ padding: '6px 12px', borderRadius: 8, background: C.primarySoft,
-                      fontSize: 12, color: C.primary, fontWeight: 700 }}>
+                      fontSize: 12, color: C.primary, fontWeight: 700, display: 'flex', alignItems: 'center' }}>
                       Silhouette Score: {pcaData.silhouette.toFixed(1)}%
+                      <InfoIcon itemsTitle="Silhouette Score" items={[
+                        { label: 'What It Measures', desc: 'How well-separated the classes are in this 2D PCA projection — how tightly each class clusters together vs. how far it sits from other classes.' },
+                        { label: 'Reading The Score', desc: '> 50%: strong separation, model should perform well.\n25-50%: moderate separation, some classes overlap.\n< 25%: weak separation, classes are not linearly distinguishable in PCA space.' },
+                        { label: 'Caveat', desc: 'Computed on only 2 principal components — a low score here doesn\'t always mean a low-dimensional dataset is unusable, since more components may separate classes better than PC1+PC2 alone.' },
+                      ]} />
                     </div>
                     <span style={{ fontSize: 12, color: C.muted }}>
                       {pcaData.silhouette > 50 ? 'Strong class separation — model should perform well.' :
@@ -1035,7 +1145,11 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
                 )}
               </ChartCard>
 
-              <ChartCard title="Scree Plot"
+              <ChartCard title={<>Scree Plot<InfoIcon itemsTitle="Scree Plot" items={[
+                  { label: 'What It Shows', desc: 'Each bar is one principal component (PC) — a combined direction of your original features. Bar height = % of total variance that PC explains on its own.' },
+                  { label: 'Cumulative Line', desc: 'The green line adds up variance explained as more PCs are included. The amber dashed line marks 80% — a common "good enough" cutoff.' },
+                  { label: 'Why It Matters', desc: 'Few PCs needed to reach 80% = features are highly correlated/redundant. Many PCs needed = features each carry distinct information.' },
+                ]} /></>}
                 sub={`80% of variance captured by ${pcaData.n_components_80} PCs.`}>
                 <ResponsiveContainer width="100%" height={200}>
                   <ComposedChart data={pcaData.scree.slice(0,8)} margin={{ top: 8, right: 8, bottom: 0, left: -10 }}>
@@ -1076,7 +1190,11 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
               sub="Amber dashed = |skew|=1 threshold. Features still above this may affect linear models.">
               <SkewnessChart current={current.skewness} original={original?.skewness} />
             </ChartCard>
-            <ChartCard title="Anomaly Score Distribution"
+            <ChartCard title={<>Anomaly Score Distribution<InfoIcon itemsTitle="Anomaly Score Distribution" items={[
+                { label: 'What It Shows', desc: 'Each row gets an IsolationForest anomaly score from 0 (very unusual) to 1 (typical). This chart is a histogram of those scores across the dataset.' },
+                { label: 'Reading The Shape', desc: 'Right-skewed toward 1 = most rows look normal, few anomalies remain. A cluster near 0 flags rows still worth reviewing.' },
+                { label: 'Before vs After', desc: 'Red = distribution before cleaning. Blue = after. A rightward shift means cleaning removed or fixed anomalous rows.' },
+              ]} /></>}
               sub="IsolationForest scores — right-skewed toward 1 = fewer anomalies remaining.">
               {current.iso_scores?.length > 0 ? (
                 <>

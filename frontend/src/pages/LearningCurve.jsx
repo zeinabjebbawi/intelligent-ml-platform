@@ -272,15 +272,6 @@ const INFO_LC = {
   ],
 }
 
-const INFO_SMOOTH = {
-  itemsTitle: 'EMA Smoothing (Exponential Moving Average)',
-  footer: 'Toggle ON to see the trend clearly. Toggle OFF to see the exact raw computed values.',
-  items: [
-    { label: 'Why It Exists', desc: 'Raw learning curves from cross-validation folds often have small random fluctuations that make the real trend harder to read. EMA smoothing applies a filter that weights recent points more heavily while preserving the overall direction.' },
-    { label: 'Formula', desc: 'Smoothed[i] = α × Raw[i] + (1 − α) × Smoothed[i−1]\nWith α = 0.35 (PRISM\'s default): each point is 35% its actual value, 65% the previous smoothed value.' },
-  ],
-}
-
 const INFO_GAP = {
   itemsTitle: 'The Generalization Gap',
   items: [
@@ -315,7 +306,6 @@ export default function LearningCurvePage({
   const [loading,   setLoading]  = useState(false)
   const [error,     setError]    = useState('')
   const [metric,    setMetric]   = useState('accuracy')
-  const [smoothing, setSmoothing] = useState(false)
 
   const filePath = getDisplayPath ? getDisplayPath('learning_curve') : projectData?.filePath
 
@@ -353,7 +343,6 @@ export default function LearningCurvePage({
       training_size: size,
       training_pct: c.training_pct?.[i],
       train_mean: c.train_mean[i], val_mean: c.val_mean[i],
-      train_smooth: c.train_smooth?.[i], val_smooth: c.val_smooth?.[i],
       gap_low:  Math.min(c.train_mean[i] ?? 0, c.val_mean[i] ?? 0),
       gap_size: Math.abs((c.train_mean[i] ?? 0) - (c.val_mean[i] ?? 0)),
     }))
@@ -445,7 +434,7 @@ export default function LearningCurvePage({
       {modelPklPath && !loading && !error && data && (
         <div style={{ padding: '24px 32px 0' }}>
 
-          {/* ── Metric tabs + Smoothing toggle (above chart) ── */}
+          {/* ── Metric tabs (above chart) ── */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', gap: 8 }}>
               {METRIC_SET.map(m => (
@@ -454,17 +443,6 @@ export default function LearningCurvePage({
               ))}
             </div>
             <div style={{ flex: 1 }} />
-            <div onClick={() => setSmoothing(s => !s)}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px',
-                background: C.card, borderRadius: 20, border: `1px solid ${C.border}`, boxShadow: shadow2, cursor: 'pointer' }}>
-              <div style={{ width: 32, height: 18, borderRadius: 9, position: 'relative',
-                background: smoothing ? C.success : C.border, transition: 'background 0.2s' }}>
-                <div style={{ position: 'absolute', top: 2, left: smoothing ? 15 : 2, width: 14, height: 14,
-                  borderRadius: '50%', background: 'white', transition: 'left 0.2s' }} />
-              </div>
-              <span style={{ fontSize: 12, fontWeight: 600, color: C.muted }}>EMA Smoothing</span>
-              <InfoIcon {...INFO_SMOOTH} width={280} />
-            </div>
             <InfoIcon {...INFO_LC} width={340} />
           </div>
 
@@ -515,9 +493,9 @@ export default function LearningCurvePage({
                     <Area dataKey="gap_size" stackId="gap" fill={hexToRgba(C.warning, 0.16)} stroke="none"
                       name="Generalization Gap" activeDot={false} legendType="square" isAnimationActive={false} />
 
-                    <Line type="monotone" dataKey={smoothing ? 'train_smooth' : 'train_mean'} stroke={C.primary} strokeWidth={2.5}
+                    <Line type="monotone" dataKey="train_mean" stroke={C.primary} strokeWidth={2.5}
                       dot={{ r: 3, fill: C.primary, strokeWidth: 0 }} activeDot={{ r: 5, strokeWidth: 0 }} name="Training" isAnimationActive={false} />
-                    <Line type="monotone" dataKey={smoothing ? 'val_smooth' : 'val_mean'} stroke={C.warning} strokeWidth={2.5}
+                    <Line type="monotone" dataKey="val_mean" stroke={C.warning} strokeWidth={2.5}
                       dot={{ r: 3, fill: C.warning, strokeWidth: 0 }} activeDot={{ r: 5, strokeWidth: 0 }} name="Validation" isAnimationActive={false} />
 
                     {optimalPct != null && (

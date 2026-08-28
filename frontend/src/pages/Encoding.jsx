@@ -124,15 +124,27 @@ const ENCODING_INFO = {
   },
 }
 
+// Every key here MUST be one of the platform's actual trainable models -
+// the exact roster Train and Test's own model dropdown offers (see
+// MODEL_GROUPS/ALL_MODELS in TrainTest.jsx). This list drifted out of sync
+// once before (it had "Neural Network" and "Gradient Boosting", neither of
+// which this platform trains, and was missing XGBoost/Naive Bayes/Ridge
+// Regression/Random Forest Regressor/K-Means entirely) - kept in the same
+// grouping order as MODEL_GROUPS (classification tree-based → linear →
+// distance → boundary → probabilistic, then regression, then clustering)
+// so it's easy to eyeball against that list when either one changes.
 const ALGORITHM_MAP = {
-  knn:                 { scaler: 'minmax',   reason: 'KNN computes distances — Min-Max keeps all features on equal scale.' },
-  logistic_regression: { scaler: 'standard', reason: 'Gradient-based optimisation converges better with Standard scaling.' },
-  svm:                 { scaler: 'standard', reason: 'SVMs are very sensitive to feature magnitude.' },
-  neural_network:      { scaler: 'minmax',   reason: 'Min-Max keeps values in [0,1] which suits most activation functions.' },
-  linear_regression:   { scaler: 'standard', reason: 'Standard scaling stabilises coefficient interpretation.' },
-  random_forest:       { scaler: 'none',     reason: 'Tree-based models are scale-invariant. Scaling is optional.' },
-  decision_tree:       { scaler: 'none',     reason: 'Decision trees split on values — scale does not matter.' },
-  gradient_boosting:   { scaler: 'none',     reason: 'Boosting is also tree-based and not sensitive to scale.' },
+  decision_tree:            { scaler: 'none',     reason: 'Decision trees split on values — scale does not matter.' },
+  random_forest:            { scaler: 'none',     reason: 'Tree-based models are scale-invariant. Scaling is optional.' },
+  xgboost:                  { scaler: 'none',     reason: 'Gradient-boosted trees split on values, like other tree-based models — scale does not matter.' },
+  logistic_regression:      { scaler: 'standard', reason: 'Gradient-based optimisation converges better with Standard scaling.' },
+  knn:                      { scaler: 'minmax',   reason: 'KNN computes distances — Min-Max keeps all features on equal scale.' },
+  svm:                      { scaler: 'standard', reason: 'SVMs are very sensitive to feature magnitude.' },
+  naive_bayes:              { scaler: 'none',     reason: 'Naive Bayes computes per-feature likelihoods independently — scaling does not change the resulting decision boundary.' },
+  linear_regression:        { scaler: 'standard', reason: 'Standard scaling stabilises coefficient interpretation.' },
+  ridge_regression:         { scaler: 'standard', reason: 'Ridge penalizes coefficient magnitude directly — unscaled features get penalized unevenly without Standard scaling.' },
+  random_forest_regressor:  { scaler: 'none',     reason: 'Like other tree-based models, splits are scale-invariant. Scaling is optional.' },
+  kmeans:                   { scaler: 'standard', reason: 'K-Means clusters by Euclidean distance to each centroid — Standard scaling keeps every feature contributing fairly.' },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -690,14 +702,17 @@ function GuidanceSection({ C }) {
             border: `1px solid ${C.border}`, fontSize: 12, background: C.card,
             color: C.text, cursor: 'pointer', outline: 'none' }}>
           <option value="">— select algorithm —</option>
-          <option value="knn">K-Nearest Neighbours (KNN)</option>
-          <option value="logistic_regression">Logistic Regression</option>
-          <option value="svm">Support Vector Machine (SVM)</option>
-          <option value="neural_network">Neural Network</option>
-          <option value="linear_regression">Linear Regression</option>
+          <option value="decision_tree">Decision Tree (CART / ID3)</option>
           <option value="random_forest">Random Forest</option>
-          <option value="decision_tree">Decision Tree</option>
-          <option value="gradient_boosting">Gradient Boosting</option>
+          <option value="xgboost">XGBoost</option>
+          <option value="logistic_regression">Logistic Regression</option>
+          <option value="knn">K-Nearest Neighbors</option>
+          <option value="svm">Support Vector Machine</option>
+          <option value="naive_bayes">Naive Bayes</option>
+          <option value="linear_regression">Linear Regression</option>
+          <option value="ridge_regression">Ridge Regression</option>
+          <option value="random_forest_regressor">Random Forest Regressor</option>
+          <option value="kmeans">K-Means</option>
         </select>
         {suggestion && (
           <div style={{ marginTop: 10, padding: '10px 12px', background: C.primarySoft, borderRadius: 8,

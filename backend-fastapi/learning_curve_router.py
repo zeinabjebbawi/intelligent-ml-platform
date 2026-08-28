@@ -52,18 +52,6 @@ def safe_round(x, nd=5):
         return None
     return round(xf, nd)
 
-def ema_smooth(values: List[float], alpha: float = 0.35) -> List[float]:
-    """Exponential Moving Average smoothing to remove noise from learning
-    curves — precomputed server-side so the frontend's toggle is instant."""
-    if not values:
-        return []
-    smoothed = [values[0]]
-    for v in values[1:]:
-        prev = smoothed[-1] if smoothed[-1] is not None else 0.0
-        vv = v if v is not None else prev
-        smoothed.append(alpha * vv + (1 - alpha) * prev)
-    return [safe_round(s) for s in smoothed]
-
 def find_plateau_index(scores: List[float], delta_threshold: float = 0.003) -> int:
     """Index of the last step where validation score improved by more than
     delta_threshold — the training size beyond which more data stopped
@@ -410,7 +398,6 @@ def compute_learning_curve(req: ComputeReq):
                     "training_pct": training_pct,
                     "train_mean": train_mean, "train_std": train_std,
                     "val_mean": val_mean, "val_std": val_std,
-                    "train_smooth": ema_smooth(train_mean), "val_smooth": ema_smooth(val_mean),
                 }
             except Exception as e:
                 curves[key] = {"error": str(e)}

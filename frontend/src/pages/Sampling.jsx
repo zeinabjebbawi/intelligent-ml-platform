@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
 import SharedVersionsBar from '../components/VersionsBar'
-import { getBalanceLevelConfig } from '../constants/balanceLevels'
+import { getBalanceLevelConfig, getSkewLevelConfig } from '../constants/balanceLevels'
 
 const shadow  = '0 4px 24px rgba(0,0,0,0.08)'
 const shadow2 = '0 1px 4px rgba(0,0,0,0.06)'
@@ -394,6 +394,7 @@ export default function SamplingPage({
     callSampling('profile', {
       file_path:     filePath,
       target_column: projectData?.targetColumn || null,
+      task_type:     projectData?.taskType || null,
     })
     .then(d => {
       setProfile(d)
@@ -424,7 +425,7 @@ export default function SamplingPage({
     if (!done || phase !== 'config' || !profile) return
     const existingOutputPath = getDisplayPath ? getDisplayPath('sampling') : null
     if (!existingOutputPath || existingOutputPath === filePath) return
-    callSampling('profile', { file_path: existingOutputPath, target_column: profile.detected_target || null })
+    callSampling('profile', { file_path: existingOutputPath, target_column: profile.detected_target || null, task_type: projectData?.taskType || null })
       .then(resumedProfile => {
         const beforeDist = profile.target_info?.class_dist || []
         const afterDist  = resumedProfile.target_info?.class_dist || []
@@ -455,6 +456,7 @@ export default function SamplingPage({
     sample_pct:     samplePct,
     stratify_col:   stratifyCol || null,
     target_col:     targetCol || null,
+    task_type:      projectData?.taskType || null,
     shuffle,
     n_clusters:     clusterN,
     reservoir_size: reservoirN,
@@ -625,9 +627,7 @@ export default function SamplingPage({
   const timeSeriesMode = !!profile?.has_time_warning
 
   const targetInfo = profile?.target_info
-  const LEVEL_CONFIG = getBalanceLevelConfig(C)
-  const levelInfo = LEVEL_CONFIG[targetInfo?.balance_level || 'no_target']
-  const imbalanceColor = levelInfo.color
+  const isClustering = projectData?.taskType === 'clustering'
   // Regression targets go through a completely different check on the
   // backend (skewness/kurtosis, not class entropy) — see
   // backend-fastapi/utils/balance_checker.py. is_classification is only
@@ -635,6 +635,22 @@ export default function SamplingPage({
   // existing classification datasets render exactly as before.
   const isRegressionTarget = targetInfo?.is_classification === false && targetInfo?.balance_level !== 'invalid'
   const isInvalidTarget = targetInfo?.balance_level === 'invalid'
+  // check_target_balance() reuses the same balanced/mild/moderate/severe
+  // level enum for a regression target's skewness as it does for a
+  // classification target's class imbalance - same severity buckets, two
+  // different measurements. getBalanceLevelConfig's words ("Balanced",
+  // "Mild Imb.") are classification-only; showing them for a skew verdict
+  // claims a continuous target has "classes" being "balanced", which is
+  // exactly the bug this card used to show. getSkewLevelConfig carries the
+  // same level keys/colors with skew-appropriate wording instead.
+  const LEVEL_CONFIG = isRegressionTarget ? getSkewLevelConfig(C) : getBalanceLevelConfig(C)
+  // Clustering deliberately has no target column - "No Target" reads as a
+  // gap to go fix ("Set target in the Upload step"), which is wrong advice
+  // here, so it gets its own distinct level instead of falling into the
+  // same bucket as a classification/regression dataset that's genuinely
+  // missing a target.
+  const levelInfo = isClustering ? getBalanceLevelConfig(C).clustering : LEVEL_CONFIG[targetInfo?.balance_level || 'no_target']
+  const imbalanceColor = levelInfo.color
 
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
@@ -737,10 +753,11 @@ export default function SamplingPage({
               this card relabels itself accordingly rather than showing a
               nonsensical "Balanced/Imbalanced" verdict on a house-price
               column. */}
-          <KPICard label={isRegressionTarget ? 'Target Distribution' : 'Target Balance'}
-            value={targetInfo ? levelInfo.label : 'No target'}
+          <KPICard label={isClustering ? 'Target Balance' : isRegressionTarget ? 'Target Distribution' : 'Target Balance'}
+            value={isClustering ? levelInfo.label : targetInfo ? levelInfo.label : 'No target'}
             sub={
-              !targetInfo ? 'Set target in the Upload step'
+              isClustering ? 'Not applicable — clustering has no target to balance'
+              : !targetInfo ? 'Set target in the Upload step'
               : isInvalidTarget ? `Column: ${targetInfo.column}`
               : isRegressionTarget ? `Column: ${targetInfo.column} · skew ${targetInfo.skewness?.toFixed(2)}`
               : `Column: ${targetInfo.column} · minority ${targetInfo.min_class_pct}%`

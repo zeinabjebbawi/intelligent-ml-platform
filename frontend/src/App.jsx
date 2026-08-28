@@ -366,7 +366,7 @@ function App() {
     return (
       <div>
         <EncodingPage
-          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
+          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
           onNext={(next) => {
             // 'feature_selection' is the only destination EncodingPage ever
             // requests, and that page doesn't exist yet (see docs/PROJECT_
@@ -397,7 +397,7 @@ function App() {
     return (
       <div>
         <FeatureEngineeringPage
-          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
+          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
           onNext={(next) => {
             // Sampling / Training don't exist yet — deliberately a no-op
             // rather than faking a transition to a page that isn't real
@@ -426,7 +426,7 @@ function App() {
     return (
       <div>
         <SamplingPage
-          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
+          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
           onNext={(next) => {
             // Feature Selection / Training don't exist yet — deliberately a
             // no-op rather than faking a transition to a page that isn't
@@ -622,10 +622,10 @@ function App() {
           bleed convention, which is exactly what produced the large equal
           gutters on both sides. Matches Sampling/Encoding/etc.'s own content
           padding now instead. */}
-      <TopNav active={navActive} onNavigate={handleNavigate} furthestOrder={furthestOrder} />
+      <TopNav active={navActive} onNavigate={handleNavigate} furthestOrder={furthestOrder} taskType={uploadMeta?.taskType} />
       <div style={{ padding: '32px 32px 0' }}>
         <CleaningPage
-          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn }}
+          projectData={{ filePath, projectId, targetColumn: uploadMeta?.targetColumn, taskType: uploadMeta?.taskType }}
           onNext={() => { setFilePath(null); setStage('load-cleaning'); }}
           onUpdateData={(update) => {
             if (update.cleanedFilePath) setFilePath(update.cleanedFilePath);
