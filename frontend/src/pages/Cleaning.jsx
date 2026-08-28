@@ -1077,8 +1077,40 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
   const [colListOpen, setColListOpen]   = useState(true)
   const [chartRailOpen, setChartRailOpen] = useState(true)
 
+  // BUG FIX (2-part — both parts needed, confirmed by tracing the actual
+  // file path used at every step):
+  //
+  // 1) Removing outliers registers a new version, which changes the
+  //    `filePath` prop this effect watches — that used to re-trigger a
+  //    full profile-outliers-global fetch against the JUST-CLEANED file.
+  //    Since outlier bounds (Q1/Q3/IQR/mean/std) are recomputed fresh from
+  //    whatever file is passed in, removing the extreme tail
+  //    shrinks/tightens the reference distribution, so points that were
+  //    fine under the old bounds can fall outside the new ones — outliers
+  //    silently "reappearing" right after they were removed. That re-check
+  //    is legitimate but should be something the user chooses (the "Check
+  //    for outliers again" button below), not automatic.
+  //
+  // 2) A DEEPER, pre-existing race: confirmBeforeAction's proceed() (in the
+  //    parent) clears THIS step's own version from `versions` before the
+  //    replacement is registered — see the comment there. That's a real,
+  //    if brief, gap where getDisplayPath('cleaning_outliers') falls back
+  //    to an EARLIER step's file (or the original upload). During that
+  //    gap, `filePath` changes too, and if this effect isn't suppressed at
+  //    that exact moment, it fires a REAL fetch against that wrong
+  //    (earlier/original) file. Whether that stray fetch's response lands
+  //    before or after the correct final state is pure network timing —
+  //    which is why outlier counts could jump back to the ORIGINAL total
+  //    on some rounds and not others: a race, not a deterministic
+  //    recompute. A single "skip the very next change" flag only guards
+  //    ONE of the two filePath transitions this operation causes (the
+  //    clear, then the later re-add) — suppressFetch instead stays true
+  //    for the operation's entire duration, covering both.
+  const suppressFetch = useRef(false)
+
   useEffect(() => {
     if (!filePath) return
+    if (suppressFetch.current) return
     setLoading(true); setSelCol(null); setColData(null); setError('')
     callCleaning('profile-outliers-global', { file_path: filePath })
       .then(setGlobal).catch(e => setError(e.message)).finally(() => setLoading(false))
@@ -1119,39 +1151,64 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
     })
   }, [])
 
+  // After a removal, suppressFetch keeps the outlier COUNTS pinned to the
+  // optimistic post-removal snapshot (see the effect above) so they don't
+  // silently jump under recomputed bounds. But the PCA/Outlier-Score
+  // charts and column list would then keep showing the PRE-removal
+  // sample — stale red dots next to stat cards that say 0. This refetches
+  // just for those visuals (which only reflect what the file looks like
+  // now, not a re-run of outlier detection) and merges them in, leaving
+  // the pinned counts untouched.
+  const refreshVisualsOnly = async (fp) => {
+    try {
+      const fresh = await callCleaning('profile-outliers-global', { file_path: fp })
+      setGlobal(prev => prev ? {
+        ...prev,
+        pca_scatter: fresh.pca_scatter,
+        outlier_index_plot: fresh.outlier_index_plot,
+        pca_variance: fresh.pca_variance,
+      } : prev)
+    } catch { /* non-critical: charts just stay as-is until the next manual recheck */ }
+  }
+
   const removeSelected = async () => {
     if (!colData) return
-    const ok = await confirmBeforeAction(stepName)
-    if (!ok) return
-    setRemoving(true)
-    const computedAll = computeOutliers(colData.all_values, method, zThresh, iqrMult, colData.stats)
-    const toRemove = computedAll.filter(v => v.isOutlier && !keptRows.has(v.row_index))
-      .map(v => v.row_index)
+    // Set BEFORE confirmBeforeAction — its proceed() clears this step's
+    // own version immediately (see the comment on suppressFetch above),
+    // which is the FIRST of two filePath transitions this operation
+    // causes. Must stay suppressed across both, not just the second.
+    suppressFetch.current = true
     try {
+      const ok = await confirmBeforeAction(stepName)
+      if (!ok) return
+      setRemoving(true)
+      const computedAll = computeOutliers(colData.all_values, method, zThresh, iqrMult, colData.stats)
+      const toRemove = computedAll.filter(v => v.isOutlier && !keptRows.has(v.row_index))
+        .map(v => v.row_index)
       const res = await callCleaning('remove-outliers', {
         file_path: filePath, column: selCol, rows_to_remove: toRemove,
       })
       await registerVersion(stepName, res.new_file_path, 'Outliers Removed', res.new_row_count,
         { column: selCol, rows_removed: res.rows_removed })
-      // Optimistic badge update — the real fetch triggered by the filePath
-      // change (via getDisplayPath, once this version is registered) will
-      // confirm/correct this moments later, but this makes the column list
-      // and stat cards feel instant instead of momentarily stale. Subtract
-      // rather than hard-set to 0: any rows the user chose to "keep" are
-      // still outliers by the default threshold and should still count.
+      // Optimistic badge update — instant instead of waiting on a refetch.
+      // Subtract rather than hard-set to 0: any rows the user chose to
+      // "keep" are still outliers by the default threshold and should
+      // still count.
       const removedCount = toRemove.length
       setGlobal(prev => prev ? {
         ...prev,
         total_outliers: Math.max(0, (prev.total_outliers || 0) - removedCount),
+        total_outlier_rows: Math.max(0, (prev.total_outlier_rows || 0) - removedCount),
         column_summary: prev.column_summary.map(c =>
           c.column === selCol ? { ...c, n_outliers: Math.max(0, c.n_outliers - removedCount) } : c
         ),
       } : prev)
+      refreshVisualsOnly(res.new_file_path)
       setSelCol(null)
       setChartRailOpen(true)
       setColListOpen(true)
     } catch (e) { setError(e.message) }
-    finally { setRemoving(false) }
+    finally { setRemoving(false); suppressFetch.current = false }
   }
 
   // "Remove All Outliers" from the global (no column selected) view.
@@ -1169,10 +1226,15 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
   // in a single remove-outliers call.
   const removeAllOutliers = async () => {
     if (!globalData) return
-    const ok = await confirmBeforeAction(stepName)
-    if (!ok) return
-    setRemovingAll(true)
+    // Set BEFORE confirmBeforeAction — see the comment on suppressFetch
+    // above. Its proceed() clears this step's version immediately, which
+    // would otherwise let this effect fire against the wrong (reverted)
+    // file for the moment before registerVersion re-adds the real one.
+    suppressFetch.current = true
     try {
+      const ok = await confirmBeforeAction(stepName)
+      if (!ok) return
+      setRemovingAll(true)
       const indexRes = await callCleaning('get-all-outlier-indices', { file_path: filePath })
       if (indexRes.outlier_indices.length === 0) return
 
@@ -1182,17 +1244,37 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
       await registerVersion(stepName, res.new_file_path, 'Outliers Removed', res.new_row_count,
         { rows_removed: res.rows_removed, per_column_counts: indexRes.per_column_counts })
 
-      // Optimistic: every column is now clean at the default threshold —
-      // the real refetch (triggered by the filePath change) confirms this.
+      // Optimistic: every column is now clean at the default threshold.
+      // Pinned in place (not overwritten by an automatic recompute);
+      // refreshVisualsOnly still updates the PCA/Outlier-Score charts so
+      // they don't keep showing pre-removal red dots that would
+      // contradict these zeroed stat cards.
       setGlobal(prev => prev ? {
-        ...prev, total_outliers: 0,
+        ...prev, total_outliers: 0, total_outlier_rows: 0,
         column_summary: prev.column_summary.map(c => ({ ...c, n_outliers: 0 })),
       } : prev)
+      refreshVisualsOnly(res.new_file_path)
     } catch (e) { setError(e.message) }
-    finally { setRemovingAll(false) }
+    finally { setRemovingAll(false); suppressFetch.current = false }
   }
 
   const startOver = async () => { await confirmBeforeAction(stepName) }
+
+  // Explicit, user-chosen re-scan of the CURRENT file — distinct from
+  // "Start over" (which resets the step and discards this version).
+  // Deliberately not automatic (see the suppressFetch effect above): the
+  // user decides whether a second pass is worth running, rather than it
+  // firing implicitly on every removal.
+  const [rechecking, setRechecking] = useState(false)
+  const recheckOutliers = async () => {
+    if (!filePath) return
+    setRechecking(true); setError('')
+    try {
+      const d = await callCleaning('profile-outliers-global', { file_path: filePath })
+      setGlobal(d)
+    } catch (e) { setError(e.message) }
+    finally { setRechecking(false) }
+  }
 
   const computedValues = useMemo(() => {
     if (!colData) return []
@@ -1241,15 +1323,26 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <StatCard label="Total outliers" value={globalData.total_outliers} subtitle="across all numeric columns" color={C.danger} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+        <StatCard label="Total outliers" value={globalData.total_outliers} subtitle="counted per column (a row in 2 columns counts twice)" color={C.danger} />
+        <StatCard label="Affected rows" value={globalData.total_outlier_rows ?? globalData.total_outliers}
+          subtitle="distinct rows Remove All would delete" color={C.danger} />
         <StatCard label="Numeric columns" value={numCols.length} subtitle="tested for normality" color={C.primary} />
         <StatCard label="Columns with outliers"
           value={globalData.column_summary.filter(c => c.n_outliers > 0).length}
           subtitle="have extreme values" color={C.warning} />
       </div>
 
-      <InfoWidget text={infoText} />
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}><InfoWidget text={infoText} /></div>
+        <button onClick={recheckOutliers} disabled={rechecking}
+          title="Re-scan the current data for outliers. Removing extreme values shifts the mean/IQR of what's left, so a second pass can flag new points — this is optional, it never runs on its own."
+          style={{ flexShrink: 0, fontSize: 11, color: C.primary, background: C.primarySoft,
+            border: `1px solid ${C.primary}`, borderRadius: 8, padding: '7px 14px',
+            cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          {rechecking ? '⏳ Checking…' : '🔍 Check for outliers again'}
+        </button>
+      </div>
 
       {done && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -1347,11 +1440,11 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
               </ExpandableChart>
             </div>
 
-            {globalData.total_outliers > 0 && (
+            {(globalData.total_outlier_rows ?? globalData.total_outliers) > 0 && (
               <div style={{ marginTop: 20 }}>
                 <button style={btn(C.danger, 'white', { padding: '12px 28px', fontSize: 14 })}
                   onClick={removeAllOutliers} disabled={removingAll}>
-                  {removingAll ? '⏳ Removing across all columns…' : `Remove All ${globalData.total_outliers} Outliers`}
+                  {removingAll ? '⏳ Removing across all columns…' : `Remove All Affected Rows (${globalData.total_outlier_rows ?? globalData.total_outliers})`}
                 </button>
               </div>
             )}

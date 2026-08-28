@@ -202,31 +202,51 @@ def remove_duplicates(req: FileReq):
 # OUTLIERS — GLOBAL
 # ─────────────────────────────────────────────────────────────────────────────
 
+def compute_outlier_masks(df: pd.DataFrame, num_cols: list):
+    """
+    One pass over every numeric column: for each, picks its detection
+    method (Z-score for normal columns, IQR for skewed), computes that
+    column's outlier row indices, and unions them into the set of distinct
+    affected rows across the whole dataset. Shared by profile-outliers-
+    global (for the "Affected Rows" stat) and get-all-outlier-indices (for
+    what "Remove All" actually removes) so those two numbers can never
+    drift apart — they're the same computation, not two.
+    """
+    col_summary = []
+    all_outlier_indices = set()
+    for col in num_cols:
+        s = df[col].dropna()
+        if len(s) < 8:
+            col_summary.append({"column": col, "n_outliers": 0,
+                                 "method": "iqr", "is_normal": True, "p_value": 1.0})
+            continue
+        is_normal, pval, _ = check_normality(s)
+        method = 'zscore' if is_normal else 'iqr'
+        bs = base_stats(s)
+        if method == 'zscore':
+            mask = df[col].notna() & (np.abs((df[col] - bs['mean']) / max(bs['std'], 1e-10)) > 3.0)
+        else:
+            mask = df[col].notna() & ((df[col] > bs['iqr_upper']) | (df[col] < bs['iqr_lower']))
+        col_indices = df.index[mask].tolist()
+        col_summary.append({
+            "column": col, "n_outliers": len(col_indices),
+            "method": method, "is_normal": is_normal, "p_value": round(pval, 4),
+        })
+        all_outlier_indices.update(col_indices)
+    return col_summary, all_outlier_indices
+
 @router.post("/profile-outliers-global")
 def profile_outliers_global(req: FileReq):
     try:
         df = read_df(req.file_path)
         num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         if not num_cols:
-            return {"total_outliers": 0, "column_summary": [],
+            return {"total_outliers": 0, "total_outlier_rows": 0, "column_summary": [],
                     "pca_scatter": [], "outlier_index_plot": []}
 
-        col_summary = []
-        total_outliers = 0
-        for col in num_cols:
-            s = df[col].dropna()
-            is_normal, pval, _ = check_normality(s)
-            method = 'zscore' if is_normal else 'iqr'
-            bs = base_stats(s)
-            if method == 'zscore':
-                n_out = int((np.abs((s - bs['mean']) / max(bs['std'], 1e-10)) > 3.0).sum())
-            else:
-                n_out = int(((s > bs['iqr_upper']) | (s < bs['iqr_lower'])).sum())
-            total_outliers += n_out
-            col_summary.append({
-                "column": col, "n_outliers": n_out,
-                "method": method, "is_normal": is_normal, "p_value": round(pval, 4),
-            })
+        col_summary, all_outlier_indices = compute_outlier_masks(df, num_cols)
+        total_outliers = sum(c['n_outliers'] for c in col_summary)
+        total_outlier_rows = len(all_outlier_indices)
 
         X_full = df[num_cols].fillna(df[num_cols].median())
         n = min(600, len(X_full))
@@ -260,6 +280,7 @@ def profile_outliers_global(req: FileReq):
 
         return {
             "total_outliers": total_outliers,
+            "total_outlier_rows": total_outlier_rows,
             "n_zscore_cols": sum(1 for c in col_summary if c['method'] == 'zscore'),
             "n_iqr_cols":    sum(1 for c in col_summary if c['method'] == 'iqr'),
             "column_summary": col_summary,
@@ -287,35 +308,22 @@ def get_all_outlier_indices(req: FileReq):
     file) avoids one column's removal shifting another's mean/std/Q1/Q3
     mid-pass, which previously let outliers re-emerge in already-processed
     columns with no re-check.
+
+    Uses the same compute_outlier_masks() pass as profile-outliers-global,
+    so the "Affected Rows" stat shown before this button is clicked always
+    matches exactly what gets removed.
     """
     try:
         df = read_df(req.file_path)
         num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-
-        all_outlier_indices = set()
-        col_counts = {}
-
-        for col in num_cols:
-            series = df[col].dropna()
-            if len(series) < 8:
-                continue
-            is_normal, _, _ = check_normality(series)
-            bs = base_stats(series)
-
-            if is_normal:
-                mask = df[col].notna() & (np.abs((df[col] - bs['mean']) / max(bs['std'], 1e-10)) > 3.0)
-            else:
-                mask = df[col].notna() & ((df[col] > bs['iqr_upper']) | (df[col] < bs['iqr_lower']))
-
-            col_indices = df.index[mask].tolist()
-            col_counts[col] = len(col_indices)
-            all_outlier_indices.update(col_indices)
+        col_summary, all_outlier_indices = compute_outlier_masks(df, num_cols)
+        per_column_counts = {c['column']: c['n_outliers'] for c in col_summary}
 
         return {
             "outlier_indices":    [int(i) for i in sorted(all_outlier_indices)],
             "total_outlier_rows": len(all_outlier_indices),
             "total_rows":         len(df),
-            "per_column_counts":  col_counts,
+            "per_column_counts":  per_column_counts,
         }
     except HTTPException:
         raise
