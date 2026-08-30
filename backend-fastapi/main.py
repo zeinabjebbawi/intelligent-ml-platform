@@ -94,6 +94,8 @@ from feature_impact_router import router as fi_router
 from learning_curve_router import router as lc_router
 from simulator_router import router as sim_router
 from report_router import router as report_router
+from auto_mode.agent import router as auto_mode_router
+from auto_mode.runner import recover_incomplete_runs
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FASTAPI APP SETUP
@@ -118,6 +120,15 @@ app.include_router(fi_router)
 app.include_router(lc_router)
 app.include_router(sim_router)
 app.include_router(report_router)
+app.include_router(auto_mode_router)
+
+
+@app.on_event("startup")
+def _recover_auto_mode_runs():
+    # Any Auto Mode run left mid-flight by a previous process (crash or
+    # restart) is re-registered as status='paused_restart', never
+    # auto-resumed - see auto_mode/runner.py's recover_incomplete_runs().
+    recover_incomplete_runs()
 
 # CORS: allow React (port 5173) and Django (port 8080) to call this API
 #

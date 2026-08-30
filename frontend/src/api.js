@@ -95,6 +95,18 @@ export const workflowAPI = {
   patch: (projectId, data) => djangoAPI.patch(`/api/projects/${projectId}/workflow/`, data),
 }
 
+// ── Auto Mode (FastAPI — backend-fastapi/auto_mode/) ───────────────────────────
+// Hits FastAPI directly (127.0.0.1:8001), same as every other ML computation
+// call — Auto Mode's own progress/audit trail is written separately to
+// Django by the graph's nodes themselves (see auto_mode/django_client.py),
+// not by the frontend, since there's no browser stitching each step
+// together the way Manual Mode relies on React to do.
+export const automodeAPI = {
+  start: (data) => mlAPI.post('/auto-mode/run', data),
+  status: (runId) => mlAPI.get(`/auto-mode/status/${runId}`),
+  resume: (runId, data) => mlAPI.post(`/auto-mode/resume/${runId}`, data),
+}
+
 // ── ML Operations (FastAPI — all computation) ─────────────────────────────────
 export const mlOpsAPI = {
   // Profile a dataset (health score, statistics)

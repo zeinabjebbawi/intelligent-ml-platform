@@ -9,3 +9,5 @@ backend-fastapi/sample_data/
 backend-django/media/
 backend-fastapi/saved_models/
 backend-fastapi/predictions/
+backend-fastapi/auto_mode/checkpoints.db*
+backend-fastapi/*.log

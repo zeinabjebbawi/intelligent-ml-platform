@@ -36,6 +36,17 @@ urlpatterns = [
     # GET /api/datasets/<uuid>/
     path('api/datasets/', include('datasets.urls')),
 
+    # PRISM Auto Mode audit trail (backend-fastapi/auto_mode/ writes here
+    # via django_client.py — the LangGraph pipeline's own pause/resume
+    # state lives in a local SQLite checkpoint file inside backend-fastapi,
+    # never in this Postgres database; this is the durable, user-facing
+    # record of what the agent did and why):
+    # POST      /api/projects/<uuid:project_id>/automode/run/
+    # GET/PATCH /api/projects/<uuid:project_id>/automode/run/<uuid>/
+    # POST      /api/projects/<uuid:project_id>/automode/run/<uuid>/decisions/
+    # PATCH     /api/projects/<uuid:project_id>/automode/run/<uuid>/decisions/<uuid>/
+    path('api/projects/<uuid:project_id>/automode/', include('experiments.urls')),
+
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 # The static() line serves uploaded files during development.
 # In production you would serve these through Nginx, not Django.

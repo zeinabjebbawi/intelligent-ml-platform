@@ -924,6 +924,7 @@ function DatasetSetupDrawer({
   suggestionInfo, setSuggestionInfo,
   taskOverride, setTaskOverride,
   onConfirm,
+  onRunAutoMode, canRunAutoMode,
 }) {
   // suggestedTask is the platform's rule-based guess for the currently
   // selected column — it NEVER changes once computed for that column, no
@@ -1029,6 +1030,28 @@ function DatasetSetupDrawer({
                   tag="Unsupervised · Clustering" selected={isLabeled === false}
                   onClick={() => setIsLabeled(false)} C={C} />
               </div>
+
+              {onRunAutoMode && (
+                <div style={{ marginTop: 22 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                    <div style={{ flex: 1, height: 1, background: C.border }} />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>or</span>
+                    <div style={{ flex: 1, height: 1, background: C.border }} />
+                  </div>
+                  <button onClick={onRunAutoMode} disabled={!canRunAutoMode}
+                    title={canRunAutoMode ? '' : 'Confirm a dataset first (Step 3) before running Auto Mode'}
+                    style={{
+                      width: '100%', padding: '13px 20px', borderRadius: 12, fontWeight: 800, fontSize: 13.5,
+                      border: `1px solid ${canRunAutoMode ? C.primary : C.border}`,
+                      background: canRunAutoMode ? C.primarySoft : C.light,
+                      color: canRunAutoMode ? C.primary : C.muted,
+                      cursor: canRunAutoMode ? 'pointer' : 'not-allowed',
+                      opacity: canRunAutoMode ? 1 : 0.6,
+                    }}>
+                    🤖 Run Auto Mode — let the agent handle the whole pipeline
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1225,7 +1248,7 @@ function DatasetSetupDrawer({
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN UPLOAD PAGE
 // ─────────────────────────────────────────────────────────────────────────────
-export default function UploadPage({ projectData, onNext, onUpdateData, active, onNavigate, furthestOrder }) {
+export default function UploadPage({ projectData, onNext, onUpdateData, active, onNavigate, furthestOrder, onRunAutoMode, canRunAutoMode }) {
   const { dark, C } = useTheme()
 
   const [dataset, setDataset] = useState(null)   // unified shape, see buildDataset()
@@ -1445,6 +1468,7 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
         suggestionInfo={suggestionInfo} setSuggestionInfo={setSuggestionInfo}
         taskOverride={taskOverride} setTaskOverride={setTaskOverride}
         onConfirm={handleConfirm}
+        onRunAutoMode={onRunAutoMode} canRunAutoMode={canRunAutoMode}
       />
     </div>
   )

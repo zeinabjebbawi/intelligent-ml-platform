@@ -12,6 +12,7 @@ import FeatureImportancePage from './pages/FeatureImportance';
 import LearningCurvePage from './pages/LearningCurve';
 import SimulatorPage from './pages/Simulator';
 import ReportPage from './pages/Report';
+import AutoModePanel from './components/AutoModePanel';
 import { authAPI, projectsAPI, datasetsAPI, versionsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
@@ -165,6 +166,72 @@ function App() {
   // Report only ever needs to read these, never react to one individually.
   const [reportContext, setReportContext] = useState({});
   const mergeReportContext = (update) => setReportContext(prev => ({ ...prev, ...update }));
+
+  // Auto Mode — a LangGraph-driven agent (backend-fastapi/auto_mode/) that
+  // runs the SAME pipeline this file's manual stages walk through by hand,
+  // registering the SAME kind of Django dataset versions along the way.
+  // Rendered as an overlay (not a separate stage) so it can sit on top of
+  // whichever manual page is currently active, per its own design — see
+  // handleAutoModeComplete below for exactly how it hands control back.
+  const [showAutoMode, setShowAutoMode] = useState(false);
+
+  // Maps an auto_mode graph node name to the real STEP_ORDER value it
+  // corresponds to (for furthestOrder) and to the manual stage key that
+  // shows the equivalent page (for navigation) — mirrors STEP_ORDER's own
+  // step-name vocabulary, not a new one.
+  const AUTOMODE_NODE_INFO = {
+    intake: { order: STEP_ORDER.upload, stage: 'upload' },
+    diagnose: { order: STEP_ORDER.diagnose, stage: 'diagnose' },
+    clean_duplicates: { order: STEP_ORDER.cleaning_duplicates, stage: 'cleaning' },
+    clean_outliers: { order: STEP_ORDER.cleaning_outliers, stage: 'cleaning' },
+    clean_missing_cols: { order: STEP_ORDER.cleaning_missing, stage: 'cleaning' },
+    clean_missing_rows: { order: STEP_ORDER.cleaning_missing, stage: 'cleaning' },
+    encode_scale: { order: STEP_ORDER.encoding, stage: 'encoding' },
+    set_goal: { order: STEP_ORDER.encoding, stage: 'encoding' },
+    feature_engineer: { order: STEP_ORDER.feature_engineering, stage: 'feature_engineering' },
+    sample: { order: STEP_ORDER.sampling, stage: 'sampling' },
+    feature_select: { order: STEP_ORDER.feature_selection, stage: 'feature_selection' },
+    select_model: { order: STEP_ORDER.training, stage: 'training' },
+    train: { order: STEP_ORDER.training, stage: 'training' },
+    retry_train: { order: STEP_ORDER.training, stage: 'training' },
+    eval_metrics: { order: STEP_ORDER.training, stage: 'training' },
+    explain: { order: STEP_ORDER.feature_impact, stage: 'feature_impact' },
+    report: { order: STEP_ORDER.report, stage: 'report' },
+    end: { order: STEP_ORDER.report, stage: 'report' },
+  };
+
+  // Exact sequence: refresh real versions from Django, unlock TopNav as
+  // far as the run actually got (never via advance() here — advance()'s
+  // own STAGE_ORDER_OVERRIDE-based computation would under-report progress
+  // for a stage key like 'cleaning' that covers 3 STEP_ORDER slots), then
+  // land the user on the matching manual page and close the panel. Runs
+  // the same way whether the run finished cleanly or was rejected/stopped
+  // partway — either way, everything up to the last completed node is a
+  // real, registered dataset version.
+  const handleAutoModeComplete = async (finalStatus) => {
+    await versionHistory.refresh();
+    // Mirror exactly what a MANUAL TrainTest.jsx run hands up via
+    // onUpdateData (see the 'training'/'feature_selection' stage blocks
+    // below) — without this, Report/Feature Importance/Learning Curve/
+    // Simulator have nothing to read, since they all key off this same
+    // App-level state regardless of whether Manual or Auto Mode produced
+    // the model.
+    if (finalStatus.model_pkl_path) setLastModelPath(finalStatus.model_pkl_path);
+    mergeReportContext({
+      lastModelName: finalStatus.model_name,
+      lastMetrics: finalStatus.model_metrics,
+      trainRatio: finalStatus.train_ratio,
+      selectedFeatures: finalStatus.selected_features,
+    });
+    const completed = finalStatus.completed_nodes || [];
+    const lastNode = [...completed].reverse().find(n => AUTOMODE_NODE_INFO[n]);
+    if (lastNode) {
+      const { order, stage: targetStage } = AUTOMODE_NODE_INFO[lastNode];
+      setFurthestOrder(prev => Math.max(prev, order));
+      setStage(targetStage);
+    }
+    setShowAutoMode(false);
+  };
 
   // The highest STEP_ORDER value the user has ever advanced INTO via a
   // page's own "Continue" button (see advance() below) — never lowered by
@@ -327,14 +394,29 @@ function App() {
   // a small dev-only link below it to keep testing the existing Cleaning page.
   if (stage === 'upload') {
     return (
-      <UploadPage
-        projectData={{ projectId }}
-        onUpdateData={handleUploadMeta}
-        onNext={() => advance('diagnose')}
-        active={navActive}
-        onNavigate={handleNavigate}
-        furthestOrder={furthestOrder}
-      />
+      <div>
+        <UploadPage
+          projectData={{ projectId }}
+          onUpdateData={handleUploadMeta}
+          onNext={() => advance('diagnose')}
+          active={navActive}
+          onNavigate={handleNavigate}
+          furthestOrder={furthestOrder}
+          onRunAutoMode={() => setShowAutoMode(true)}
+          canRunAutoMode={!!(filePath && uploadMeta)}
+        />
+        {showAutoMode && (
+          <AutoModePanel
+            projectId={projectId}
+            filePath={filePath}
+            taskType={uploadMeta?.taskType}
+            targetColumn={uploadMeta?.targetColumn}
+            userIntent={uploadMeta?.userIntent}
+            onClose={() => setShowAutoMode(false)}
+            onComplete={handleAutoModeComplete}
+          />
+        )}
+      </div>
     );
   }
 

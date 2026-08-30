@@ -15,6 +15,16 @@ class Experiment(models.Model):
         ('running', 'Running'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
+        # The three below back PRISM Auto Mode (backend-fastapi/auto_mode/):
+        # 'paused' — waiting on a human-in-the-loop checkpoint response.
+        # 'paused_restart' — the FastAPI process restarted mid-run; the
+        #   graph's own checkpoint was recovered but is deliberately NOT
+        #   auto-resumed until a human explicitly confirms.
+        # 'aborted' — the user rejected a checkpoint. Every version already
+        #   registered up to that point is kept; only the run itself stops.
+        ('paused', 'Paused'),
+        ('paused_restart', 'Paused (Restart)'),
+        ('aborted', 'Aborted'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -49,6 +59,9 @@ class Experiment(models.Model):
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     train_test_split = models.FloatField(default=0.6)  # 60% train / 40% test
+    # Which auto_mode/graph.py node this run is currently on (or paused at)
+    # — e.g. "feature_select", "train". Empty for a non-Auto-Mode Experiment.
+    current_node = models.CharField(max_length=50, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -85,7 +98,24 @@ class AgentDecision(models.Model):
     decision_output = models.JSONField(default=dict)
 
     reasoning = models.TextField(blank=True, default='')
+
+    # The three fields below back PRISM Auto Mode's human-in-the-loop
+    # checkpoints (backend-fastapi/auto_mode/). requires_confirmation=True
+    # marks this row as a real HITL checkpoint (as opposed to a routine,
+    # non-blocking decision like encoding/scaling); confirmed stays None
+    # until the user actually responds (True=approved/edited,
+    # False=rejected — rejecting aborts the whole Auto Mode run, but the
+    # decision row itself is kept as the historical record of what was
+    # proposed and why). user_override holds whatever the user changed if
+    # they edited rather than approved outright.
+    requires_confirmation = models.BooleanField(default=False)
+    confirmed = models.BooleanField(null=True, default=None)
+    user_override = models.JSONField(default=dict)
+
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
 
     def __str__(self):
         return f"{self.decision_type} — {self.experiment}"
