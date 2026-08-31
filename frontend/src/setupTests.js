@@ -26,3 +26,13 @@ if (typeof globalThis.IntersectionObserver === 'undefined') {
     disconnect() {}
   };
 }
+
+// jsdom has no real 2D canvas backend (installing one requires the native
+// `canvas` npm package, not present here) — calling getContext('2d') logs a
+// noisy "not implemented" warning and returns undefined. Landing's
+// ScrollVisual already guards against a falsy context and skips drawing, so
+// this stub just makes that the clean, silent path under tests too, rather
+// than a caught-but-logged jsdom warning on every test run.
+if (typeof HTMLCanvasElement !== 'undefined') {
+  HTMLCanvasElement.prototype.getContext = () => null;
+}

@@ -179,33 +179,101 @@ const fmtCell = (v) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SMALL SHARED COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const SectionTag = ({ icon, label, sub, C }) => (
+const SectionTag = ({ icon, label, sub, info, C }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
     <span style={{ fontSize: 13 }}>{icon}</span>
     <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.5,
       textTransform: 'uppercase', color: C.primary }}>{label}</span>
+    {info}
     {sub && <span style={{ fontSize: 11, color: C.muted }}>{sub}</span>}
   </div>
 )
 
-const InfoPopover = ({ text, C }) => {
+// Canonical dual-mode InfoIcon — ported verbatim (same as TrainTest.jsx /
+// DataReadiness.jsx this session): position:fixed + useLayoutEffect
+// measuring the real rendered box, so the popup can never end up clipped
+// by an ancestor's overflow (the Encoding table's own `overflowX: auto`
+// wrapper included) or run off the viewport. Replaces the old InfoPopover,
+// which was defined but never actually wired up anywhere on this page.
+const WIDE_POPUP_W = 560
+const NARROW_POPUP_W = 300
+
+const InfoIcon = ({ content, items, itemsTitle, footer, width }) => {
+  const { C } = useTheme()
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const popupRef = useRef(null)
+  const isWide = !!items
+  const popupW = width || (isWide ? WIDE_POPUP_W : NARROW_POPUP_W)
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    const w = popupRef.current?.offsetWidth || popupW
+    const h = popupRef.current?.offsetHeight || 0
+    const left = Math.max(12, Math.min(r.right + 8, window.innerWidth - w - 12))
+    const top  = Math.max(12, Math.min(r.top - 6, window.innerHeight - h - 12))
+    setPos({ left, top })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   return (
     <span style={{ position: 'relative', display: 'inline-block' }}>
-      <button onClick={() => setOpen(o => !o)}
-        style={{ width: 16, height: 16, borderRadius: '50%', border: `1px solid ${C.border}`,
-          background: C.card, color: C.muted, fontSize: 10, fontWeight: 700,
-          cursor: 'pointer', lineHeight: 1, padding: 0, marginLeft: 4 }}>ⓘ</button>
+      <button ref={btnRef} onClick={() => setOpen(o => !o)} title="Learn more"
+        style={{
+          width: 18, height: 18, border: 'none', background: 'none', padding: 0,
+          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          marginLeft: 4, flexShrink: 0, lineHeight: 1, transition: 'all 0.15s',
+        }}>
+        <svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="7.25" fill={open ? C.primary : C.primarySoft} stroke={C.primary} strokeWidth="1.5" />
+          <circle cx="9" cy="5.7" r="1.05" fill={open ? '#fff' : C.primary} />
+          <rect x="8.15" y="8.1" width="1.7" height="5" rx="0.85" fill={open ? '#fff' : C.primary} />
+        </svg>
+      </button>
       {open && (
-        <div style={{ position: 'absolute', top: 22, left: 0, zIndex: 200,
-          background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
-          padding: '10px 14px', width: 260, fontSize: 12, color: C.text,
-          lineHeight: 1.6, boxShadow: shadow }}>
-          {text}
-          <button onClick={() => setOpen(false)}
-            style={{ position: 'absolute', top: 6, right: 8, background: 'none',
-              border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>✕</button>
-        </div>
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 998 }} />
+          {isWide ? (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '16px 20px', width: popupW, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow,
+              fontSize: 12, color: C.text,
+              fontWeight: 400, textTransform: 'none', letterSpacing: 'normal',
+            }}>
+              {itemsTitle && (
+                <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: 'uppercase',
+                  letterSpacing: 1, marginBottom: 12 }}>{itemsTitle}</div>
+              )}
+              <div style={{ columns: '2 230px', columnGap: 22 }}>
+                {items.map(it => (
+                  <div key={it.label} style={{ breakInside: 'avoid', marginBottom: 13 }}>
+                    <div style={{ fontWeight: 800, fontSize: 12.5, color: C.text, marginBottom: 3 }}>{it.label}</div>
+                    <div style={{ fontWeight: 400, fontSize: 11.5, color: C.muted, lineHeight: 1.55, whiteSpace: 'pre-line' }}>{it.desc}</div>
+                  </div>
+                ))}
+              </div>
+              {footer && (
+                <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px dashed ${C.border}`,
+                  fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: 1.6 }}>{footer}</div>
+              )}
+            </div>
+          ) : (
+            <div ref={popupRef} style={{
+              position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, zIndex: 999,
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '14px 16px', width: popupW, maxWidth: 'calc(100vw - 24px)',
+              maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', boxShadow: shadow, fontSize: 12,
+              color: C.text, lineHeight: 1.65, whiteSpace: 'pre-line',
+              fontWeight: 400, textTransform: 'none', letterSpacing: 'normal',
+            }}>
+              {content}
+            </div>
+          )}
+        </>
       )}
     </span>
   )
@@ -358,7 +426,10 @@ function DatasetTable({
     <div ref={containerRef} style={{ overflowX: 'auto' }}>
       {/* ENCODING controls row */}
       <div style={{ padding: '10px 16px 4px', borderBottom: `1px dashed ${C.border}` }}>
-        <SectionTag C={C} icon="✎" label="Encoding" sub="select for categorical columns" />
+        <SectionTag C={C} icon="✎" label="Encoding" sub="select for categorical columns"
+          info={<InfoIcon itemsTitle="Encoding Methods" footer="★ in the dropdown marks PRISM's suggestion for that column, based on how many distinct categories it has." items={
+            Object.values(ENCODING_INFO).map(e => ({ label: e.label, desc: e.detail }))
+          } />} />
       </div>
       {/* No explicit width + horizontal padding here on purpose. This row
           used to be `width: totalWidth` (which already bakes in ROW_N_W of
@@ -750,6 +821,11 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
   const [profile,  setProfile]  = useState(null)
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState('')
+  // `error` stays load-only (gates the full-page early-return below). Every
+  // encode/scale/apply action below runs after `profile` already loaded and
+  // the tables are already on screen, so a failure there must show inline
+  // instead of replacing the whole page with a bare banner.
+  const [actionError, setActionError] = useState('')
   const [dismissed, setDismissed] = useState(false)
 
   const [encChoices, setEncChoices] = useState({})
@@ -832,10 +908,11 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
     }
     setEncChoices(prev => ({ ...prev, [colName]: method }))
     setLoadingCol(colName)
+    setActionError('')
     try {
       const res = await callEncoding('encode-column', { file_path: filePath, column: colName, method })
       setEncResults(prev => ({ ...prev, [colName]: res }))
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setLoadingCol(null) }
   }, [filePath])
 
@@ -847,10 +924,11 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
     }
     setScaleChoices(prev => ({ ...prev, [colName]: method }))
     setLoadingCol(colName)
+    setActionError('')
     try {
       const res = await callEncoding('scale-column', { file_path: filePath, column: colName, method })
       setScaleResults(prev => ({ ...prev, [colName]: res }))
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setLoadingCol(null) }
   }, [filePath])
 
@@ -859,6 +937,7 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
   // fresh from the applied file rather than assembled client-side, so it's
   // exactly what's actually on disk. ─────────────────────────────────────
   const handleApply = useCallback(async () => {
+    setActionError('')
     setApplying(true)
     try {
       const encoding_decisions = Object.entries(encChoices).map(([column, method]) => ({ column, method }))
@@ -872,7 +951,7 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
       if (registerVersion) await registerVersion('encoding', res.new_file_path, 'Encoding & Scaling', res.row_count)
       if (onUpdateData) onUpdateData({ cleanedFilePath: res.new_file_path })
       setApplied(true)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setApplying(false) }
   }, [filePath, encChoices, scaleChoices, registerVersion, onUpdateData])
 
@@ -948,6 +1027,13 @@ export default function EncodingPage({ projectData, onNext, onUpdateData,
       <div style={{ display: 'flex', gap: 16, padding: 20, alignItems: 'flex-start' }}>
         {/* ── LEFT ~75%: dataset + preview + apply ─────────────────────────── */}
         <div style={{ flex: '1 1 75%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {actionError && (
+            <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`,
+              borderRadius: 10, padding: '10px 16px', color: C.danger, fontSize: 13 }}>
+              ⚠ {actionError}
+            </div>
+          )}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <SectionTag C={C} icon="▤" label={applied ? 'Original & Modified Dataset' : 'Original Cleaned Dataset'} />

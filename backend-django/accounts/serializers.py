@@ -12,6 +12,16 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ['email', 'password', 'first_name', 'last_name']
 
+    def validate_email(self, value):
+        # User.email isn't unique by default (only username is) — since
+        # create() below maps username=email, a repeat email would otherwise
+        # hit the database's unique constraint on username directly and
+        # raise an uncaught IntegrityError (a raw 500) instead of a clean
+        # validation error.
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return value
+
     def create(self, validated_data):
         # create_user hashes the password automatically — never store plain passwords
         # Django requires a username field; we use the email as the username

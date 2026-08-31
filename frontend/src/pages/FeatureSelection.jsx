@@ -899,6 +899,11 @@ export default function FeatureSelectionPage({
   const [data,     setData]    = useState(null)
   const [loading,  setLoading] = useState(true)
   const [error,    setError]   = useState('')
+  // `error` stays load-only (gates the full-page early-return below).
+  // handleApply runs after `data` already loaded and the whole page (chart,
+  // heatmap, feature table) is already rendered, so its failure must show
+  // inline instead of replacing all of that with a bare banner.
+  const [actionError, setActionError] = useState('')
   const [selected, setSelected] = useState(new Set())
   const [applying, setApplying] = useState(false)
   const [applied,  setApplied]  = useState(false)
@@ -982,6 +987,7 @@ export default function FeatureSelectionPage({
 
   const handleApply = useCallback(async () => {
     if (!filePath || (!targetCol && !isClustering) || !data) return
+    setActionError('')
     setApplying(true)
     try {
       const res = await callFS('apply', {
@@ -1000,7 +1006,7 @@ export default function FeatureSelectionPage({
       setData(freshData)
       setSelected(new Set(freshData.features.map(f => f.name)))
       setApplied(true)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setApplying(false) }
   }, [filePath, targetCol, isClustering, projectData?.taskType, data, selected, registerVersion, onUpdateData])
 
@@ -1108,6 +1114,12 @@ export default function FeatureSelectionPage({
       <SharedVersionsBar versions={versions} />
 
       <div style={{ padding: '20px 32px 0' }}>
+        {actionError && (
+          <div style={{ marginBottom: 16, background: C.dangerSoft, border: `1px solid ${C.danger}`,
+            borderRadius: 10, padding: '10px 16px', color: C.danger, fontSize: 13 }}>
+            ⚠ {actionError}
+          </div>
+        )}
         <InfoBanner isClustering={isClustering} />
 
         {/* ── Analyst summary ─────────────────────────────────────────────── */}

@@ -345,6 +345,14 @@ export default function SamplingPage({
   const [profile, setProfile]   = useState(null)
   const [loading, setLoading]   = useState(true)
   const [error,   setError]     = useState('')
+  // Separate from `error` on purpose: `error` gates the page's early-return
+  // (profile failed to load — nothing else can render). A failed Run/Apply
+  // happens on an already-fully-rendered page, so it must show inline
+  // without blanking the KPIs/method grid/preview that are already on
+  // screen — routing it through `error` was exactly what made the whole
+  // page disappear behind a bare red banner on a structurally-invalid
+  // method choice (e.g. ADASYN with a still-categorical feature column).
+  const [actionError, setActionError] = useState('')
 
   // Controls
   const [method,      setMethod]      = useState('simple_random')
@@ -469,6 +477,7 @@ export default function SamplingPage({
   // ── Run sampling (preview, no save) ────────────────────────────────────
   const handleRun = useCallback(async () => {
     if (!filePath) return
+    setActionError('')
     setPhase('running')
     try {
       const res = await callSampling('run', buildSamplingBody())
@@ -476,7 +485,7 @@ export default function SamplingPage({
       setPhase('preview')
       setPreviewTab('sampled')
     } catch (e) {
-      setError(e.message)
+      setActionError(e.message)
       setPhase('config')
     }
   }, [filePath, method, samplePct, stratifyCol, targetCol, shuffle, clusterN, reservoirN, dateColumn, startDate, endDate, stepSize])
@@ -484,6 +493,7 @@ export default function SamplingPage({
   // ── Apply (save version) ────────────────────────────────────────────────
   const handleApply = useCallback(async () => {
     if (!filePath) return
+    setActionError('')
     setApplying(true)
     try {
       const res = await callSampling('apply', buildSamplingBody())
@@ -492,7 +502,7 @@ export default function SamplingPage({
         await registerVersion('sampling', res.new_file_path, 'Sampled Version', res.row_count)
       if (onUpdateData) onUpdateData({ cleanedFilePath: res.new_file_path })
       setPhase('applied')
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setApplying(false) }
   }, [filePath, method, samplePct, stratifyCol, targetCol, shuffle, clusterN, reservoirN, dateColumn, startDate, endDate, stepSize, registerVersion, onUpdateData])
 
@@ -553,18 +563,21 @@ export default function SamplingPage({
       desc: 'Like SMOTE, but generates more synthetic samples near the decision boundary — where classes overlap most.',
       guidance: 'Best when parts of the minority class are especially hard to learn, not just underrepresented.',
       showSlider: false, showStratify: false, showTargetCol: true,
+      requiresNumericFeatures: true,
     },
     borderline_smote: {
       label: 'Borderline-SMOTE', icon: '🚧',
       desc: 'Generates synthetic samples only from minority points already "in danger" of misclassification.',
       guidance: 'Best when misclassifications cluster right at the class boundary, not throughout the minority class.',
       showSlider: false, showStratify: false, showTargetCol: true,
+      requiresNumericFeatures: true,
     },
     kmeans_smote: {
       label: 'KMeans-SMOTE', icon: '🧩',
       desc: 'Clusters the data first, then generates synthetic samples only inside dense, safe cluster regions.',
       guidance: 'Best when the minority class has distinct sub-groups. Needs real cluster structure to work well.',
       showSlider: false, showStratify: false, showTargetCol: true,
+      requiresNumericFeatures: true,
     },
     systematic: {
       label: 'Systematic Sampling', icon: '⏭',
@@ -625,6 +638,18 @@ export default function SamplingPage({
 
   const currentMethod = METHOD_INFO[method] || TIME_SAFE_METHODS[method] || METHOD_INFO.simple_random
   const timeSeriesMode = !!profile?.has_time_warning
+
+  // ADASYN / Borderline-SMOTE / KMeans-SMOTE have no categorical-aware
+  // variant in imbalanced-learn (unlike plain SMOTE, which upgrades to
+  // SMOTENC) — the backend hard-rejects them the moment any non-target
+  // column is still non-numeric (see sampling_router.py's
+  // _numeric_feature_matrix). Mirrors that exact check here — "feature
+  // columns" is every column except whichever one ends up as the target —
+  // so the three cards can be greyed out with a real reason before the
+  // user ever hits Run, instead of surfacing that backend error raw.
+  const effectiveTargetCol = targetCol || profile?.detected_target || projectData?.targetColumn || ''
+  const nonNumericFeatureCols = (profile?.categorical_columns || []).filter(c => c !== effectiveTargetCol)
+  const numericFeaturesBlocked = nonNumericFeatureCols.length > 0
 
   const targetInfo = profile?.target_info
   const isClustering = projectData?.taskType === 'clustering'
@@ -867,7 +892,7 @@ export default function SamplingPage({
                     const active = method === key
                     return (
                       <button key={key}
-                        onClick={() => { setMethod(key); setResults(null); setPhase('config') }}
+                        onClick={() => { setMethod(key); setResults(null); setPhase('config'); setActionError('') }}
                         style={{
                           padding: '10px 8px', borderRadius: 10, cursor: 'pointer',
                           border: `1.5px solid ${active ? C.success : C.success + '80'}`,
@@ -899,28 +924,38 @@ export default function SamplingPage({
                     ...group.keys.map(key => {
                       const info = METHOD_INFO[key]
                       const active = method === key
+                      const numericBlocked = !!info.requiresNumericFeatures && numericFeaturesBlocked
+                      const cardDisabled = timeSeriesMode || numericBlocked
                       return (
                         <button key={key}
-                          disabled={timeSeriesMode}
-                          onClick={() => { setMethod(key); setResults(null); setPhase('config') }}
+                          disabled={cardDisabled}
+                          onClick={() => { setMethod(key); setResults(null); setPhase('config'); setActionError('') }}
+                          title={numericBlocked && !timeSeriesMode
+                            ? `Needs every feature column to already be numeric — ${nonNumericFeatureCols.slice(0, 5).join(', ')}${nonNumericFeatureCols.length > 5 ? '…' : ''} still isn't. Encode it on the Scaling & Encoding page first, or use Minority Oversampling (SMOTE) instead.`
+                            : undefined}
                           style={{
                             padding: '10px 8px', borderRadius: 10,
-                            cursor: timeSeriesMode ? 'not-allowed' : 'pointer',
-                            border: `1.5px solid ${active && !timeSeriesMode ? C.primary : C.border}`,
-                            background: active && !timeSeriesMode ? C.primarySoft : C.card,
+                            cursor: cardDisabled ? 'not-allowed' : 'pointer',
+                            border: `1.5px solid ${active && !cardDisabled ? C.primary : C.border}`,
+                            background: active && !cardDisabled ? C.primarySoft : C.card,
                             textAlign: 'left', transition: 'all 0.15s',
-                            opacity: timeSeriesMode ? 0.35 : 1,
-                            pointerEvents: timeSeriesMode ? 'none' : 'auto',
+                            opacity: cardDisabled ? 0.35 : 1,
+                            pointerEvents: cardDisabled ? 'none' : 'auto',
                           }}>
                           <div style={{ fontSize: 14, marginBottom: 2 }}>{info.icon}</div>
                           <div style={{ fontSize: 12, fontWeight: 700,
-                            color: active && !timeSeriesMode ? C.primary : C.text }}>{info.label}</div>
+                            color: active && !cardDisabled ? C.primary : C.text }}>{info.label}</div>
                           <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>
                             {info.desc}
                           </div>
                           {timeSeriesMode && (
                             <div style={{ fontSize: 9, fontWeight: 700, color: C.danger, marginTop: 4 }}>
                               ⚠ Not safe for time-series
+                            </div>
+                          )}
+                          {!timeSeriesMode && numericBlocked && (
+                            <div style={{ fontSize: 9, fontWeight: 700, color: C.danger, marginTop: 4 }}>
+                              ⚠ Needs numeric features — encode {nonNumericFeatureCols[0]}{nonNumericFeatureCols.length > 1 ? ` +${nonNumericFeatureCols.length - 1} more` : ''} first
                             </div>
                           )}
                         </button>
@@ -1106,6 +1141,18 @@ export default function SamplingPage({
                 </div>
               </div>
             </div>
+
+            {/* Run/Apply failure — inline, next to the button that caused it,
+                so the rest of the already-rendered page (KPIs, method grid,
+                preview) stays exactly as it was rather than disappearing
+                behind a full-page error. */}
+            {actionError && (
+              <div style={{ marginBottom: 14, padding: '10px 12px',
+                background: C.dangerSoft, border: `1px solid ${C.danger}`,
+                borderRadius: 9, color: C.danger, fontSize: 12, lineHeight: 1.5 }}>
+                ⚠ {actionError}
+              </div>
+            )}
 
             {/* RUN button */}
             {phase !== 'applied' && (

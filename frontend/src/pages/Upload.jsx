@@ -924,7 +924,7 @@ function DatasetSetupDrawer({
   suggestionInfo, setSuggestionInfo,
   taskOverride, setTaskOverride,
   onConfirm,
-  onRunAutoMode, canRunAutoMode,
+  onConfirmAutoMode, preparingAutoMode,
 }) {
   // suggestedTask is the platform's rule-based guess for the currently
   // selected column — it NEVER changes once computed for that column, no
@@ -1030,28 +1030,6 @@ function DatasetSetupDrawer({
                   tag="Unsupervised · Clustering" selected={isLabeled === false}
                   onClick={() => setIsLabeled(false)} C={C} />
               </div>
-
-              {onRunAutoMode && (
-                <div style={{ marginTop: 22 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                    <div style={{ flex: 1, height: 1, background: C.border }} />
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>or</span>
-                    <div style={{ flex: 1, height: 1, background: C.border }} />
-                  </div>
-                  <button onClick={onRunAutoMode} disabled={!canRunAutoMode}
-                    title={canRunAutoMode ? '' : 'Confirm a dataset first (Step 3) before running Auto Mode'}
-                    style={{
-                      width: '100%', padding: '13px 20px', borderRadius: 12, fontWeight: 800, fontSize: 13.5,
-                      border: `1px solid ${canRunAutoMode ? C.primary : C.border}`,
-                      background: canRunAutoMode ? C.primarySoft : C.light,
-                      color: canRunAutoMode ? C.primary : C.muted,
-                      cursor: canRunAutoMode ? 'pointer' : 'not-allowed',
-                      opacity: canRunAutoMode ? 1 : 0.6,
-                    }}>
-                    🤖 Run Auto Mode — let the agent handle the whole pipeline
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
@@ -1214,6 +1192,29 @@ function DatasetSetupDrawer({
                 }}>
                 Confirm & Start Diagnosis →
               </button>
+
+              {/* Both paths start from the SAME confirmed dataset — this is
+                  the point where isLabeled/target/task are all actually
+                  known, unlike Step 1, where showing this button would mean
+                  either disabling it (confusing) or running Auto Mode
+                  before there's a real task_type to hand it. */}
+              {onConfirmAutoMode && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0' }}>
+                    <div style={{ flex: 1, height: 1, background: C.border }} />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>or</span>
+                    <div style={{ flex: 1, height: 1, background: C.border }} />
+                  </div>
+                  <button onClick={onConfirmAutoMode} disabled={preparingAutoMode}
+                    style={{
+                      width: '100%', padding: 14, borderRadius: 12, fontWeight: 800, fontSize: 14,
+                      border: `1px solid ${C.primary}`, background: C.primarySoft, color: C.primary,
+                      cursor: preparingAutoMode ? 'default' : 'pointer', opacity: preparingAutoMode ? 0.6 : 1,
+                    }}>
+                    {preparingAutoMode ? 'Preparing…' : '🤖 Run Auto Mode — let the agent handle the whole pipeline'}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1248,7 +1249,7 @@ function DatasetSetupDrawer({
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN UPLOAD PAGE
 // ─────────────────────────────────────────────────────────────────────────────
-export default function UploadPage({ projectData, onNext, onUpdateData, active, onNavigate, furthestOrder, onRunAutoMode, canRunAutoMode }) {
+export default function UploadPage({ projectData, onNext, onUpdateData, active, onNavigate, furthestOrder, onRunAutoMode, preparingAutoMode }) {
   const { dark, C } = useTheme()
 
   const [dataset, setDataset] = useState(null)   // unified shape, see buildDataset()
@@ -1328,28 +1329,38 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
     setDrawerOpen(true)
   }
 
+  // Shared by both Step 3 buttons — Manual Mode and Auto Mode both start
+  // from the exact same confirmed dataset/target/task, they just diverge on
+  // what happens next (advance to Diagnose vs. open the Auto Mode panel).
+  const buildConfirmPayload = () => ({
+    isLabeled: !!isLabeled,
+    targetColumn: isLabeled ? selectedTarget : null,
+    // canGoNext already guarantees this is actionable before Step 3 is
+    // reachable, but mirrors the same "never trust a bare suggestedTask"
+    // rule as the drawer's own finalTask, rather than assuming.
+    taskType: isLabeled ? (taskOverride || (ACTIONABLE_TASKS.includes(suggestedTask) ? suggestedTask : null)) : 'clustering',
+    learningType: isLabeled ? 'supervised' : 'unsupervised',
+    datasetFilename: dataset?.filename,
+    rowCount: dataset?.rowCount,
+    columnCount: dataset?.columnCount,
+    // The actual data, so Diagnose.jsx can open directly on what was just
+    // confirmed here instead of asking the user to load the same CSV twice.
+    columns: dataset?.columns,
+    rows: dataset?.rows,
+    // Real file/blob so App.jsx can persist it through Django's upload
+    // endpoint, giving the whole downstream pipeline (Cleaning/Encoding/
+    // FeatureEngineering) a real version-1 file_path to chain off of.
+    rawFile,
+  })
+
   const handleConfirm = () => {
-    onUpdateData?.({
-      isLabeled: !!isLabeled,
-      targetColumn: isLabeled ? selectedTarget : null,
-      // canGoNext already guarantees this is actionable before Step 3 is
-      // reachable, but mirrors the same "never trust a bare suggestedTask"
-      // rule as the drawer's own finalTask, rather than assuming.
-      taskType: isLabeled ? (taskOverride || (ACTIONABLE_TASKS.includes(suggestedTask) ? suggestedTask : null)) : 'clustering',
-      learningType: isLabeled ? 'supervised' : 'unsupervised',
-      datasetFilename: dataset?.filename,
-      rowCount: dataset?.rowCount,
-      columnCount: dataset?.columnCount,
-      // The actual data, so Diagnose.jsx can open directly on what was just
-      // confirmed here instead of asking the user to load the same CSV twice.
-      columns: dataset?.columns,
-      rows: dataset?.rows,
-      // Real file/blob so App.jsx can persist it through Django's upload
-      // endpoint, giving the whole downstream pipeline (Cleaning/Encoding/
-      // FeatureEngineering) a real version-1 file_path to chain off of.
-      rawFile,
-    })
+    onUpdateData?.(buildConfirmPayload())
     onNext?.('diagnose', {})
+  }
+
+  const handleConfirmForAutoMode = () => {
+    onUpdateData?.(buildConfirmPayload())
+    onRunAutoMode?.()
   }
 
   return (
@@ -1468,7 +1479,7 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
         suggestionInfo={suggestionInfo} setSuggestionInfo={setSuggestionInfo}
         taskOverride={taskOverride} setTaskOverride={setTaskOverride}
         onConfirm={handleConfirm}
-        onRunAutoMode={onRunAutoMode} canRunAutoMode={canRunAutoMode}
+        onConfirmAutoMode={handleConfirmForAutoMode} preparingAutoMode={preparingAutoMode}
       />
     </div>
   )

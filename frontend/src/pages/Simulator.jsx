@@ -535,6 +535,13 @@ export default function SimulatorPage({
   const [config, setConfig] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // `error` stays load-only (config defaults failed to load — the panel
+  // below genuinely has nothing to render yet). debouncedPredict fires on
+  // every slider move and handleBatchFile on every upload, both AFTER the
+  // panel is already showing sliders/mode-toggle/chart — routing either
+  // through `error` hid that whole panel behind a bare banner on every
+  // single failed prediction, with no way back to adjust inputs and retry.
+  const [actionError, setActionError] = useState('')
 
   const [mode, setMode] = useState('single')
 
@@ -577,6 +584,7 @@ export default function SimulatorPage({
     if (!filePath || !modelPklPath) return
     const myRequestId = ++requestIdRef.current
     setPredicting(true)
+    setActionError('')
     try {
       const res = await callSim('predict-single', {
         file_path: filePath, target_column: projectData?.targetColumn || '', model_pkl_path: modelPklPath,
@@ -585,7 +593,7 @@ export default function SimulatorPage({
       if (myRequestId !== requestIdRef.current) return // superseded by a newer request
       setPrediction(res.prediction)
       setShapData(res.shap)
-    } catch (e) { setError(e.message) }
+    } catch (e) { if (myRequestId === requestIdRef.current) setActionError(e.message) }
     finally { if (myRequestId === requestIdRef.current) setPredicting(false) }
   }, 300), [filePath, modelPklPath, projectData?.targetColumn, projectData?.taskType])
 
@@ -604,13 +612,13 @@ export default function SimulatorPage({
   }, [config])
 
   const handleBatchFile = useCallback(async file => {
-    setUploading(true); setBatchData(null); setError('')
+    setUploading(true); setBatchData(null); setActionError('')
     try {
       const res = await callBatch(modelPklPath, projectData?.taskType || 'classification', file)
       setBatchData(res)
       if (res.shap) setShapData(res.shap)
       if (res.first_pred?.prediction) setPrediction(res.first_pred.prediction)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setUploading(false) }
   }, [modelPklPath, projectData?.taskType])
 
@@ -672,6 +680,13 @@ export default function SimulatorPage({
 
       {modelPklPath && !loading && !error && config && (
         <div style={{ padding: '10px 32px 0', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+
+          {actionError && (
+            <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 10,
+              padding: '10px 16px', color: C.danger, fontSize: 13, marginBottom: 10, flexShrink: 0 }}>
+              ⚠ {actionError}
+            </div>
+          )}
 
           {/* ── Mode Toggle ── (compact - freed vertical space goes to the
               SHAP chart below so it fits without its own scroll) */}

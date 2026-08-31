@@ -17,8 +17,24 @@ structured as:
     5. mutating tool calls + version registration   <- only ever reached once
     6. return the state update dict
 
-Non-decision nodes (the four cleaning execution nodes, retry_train, report)
-have no LLM call and no interrupt — they just execute tools.
+Every stage that mutates the dataset (cleaning, encoding, feature
+engineering, sampling, feature selection, training) now follows a uniform
+two-phase pattern end to end:
+  PROPOSE  — a decide-node above, gated by a real approve/edit/reject
+             checkpoint (checkpoint_type varies, review_only: False)
+  REVIEW   — a tiny node_review_* below, run immediately after the mutation
+             lands and its version is registered. Its ENTIRE body before
+             interrupt() is a read of already-computed `state` fields (no
+             tool calls) — deliberately, so re-running it from the top on
+             resume is trivially side-effect-free. It only offers
+             "continue" (review_only: True); rejecting still aborts the
+             whole run, for a consistent safety valve, but there is
+             nothing to "edit" at a pure review step.
+This is what lets the user watch the REAL page behind the Auto Mode panel
+actually update (App.jsx's syncToAutoModeNode fires on every current_node
+change) before being asked to confirm the NEXT stage's plan, mirroring
+the same "try it, see the real result, then decide" rhythm Manual Mode
+already has on every page.
 """
 import json
 from typing import Any, Dict, List
@@ -65,7 +81,8 @@ def _checkpoint(checkpoint_type: str, proposal: Dict[str, Any], reasoning: str) 
     """Pauses the graph (first pass) or returns the stored human decision
     (resume pass). Decision shape: {"action": "approve"|"edit"|"reject",
     "payload": {...}, "reason": "..."}."""
-    return interrupt({"checkpoint_type": checkpoint_type, "proposal": proposal, "reasoning": reasoning})
+    return interrupt({"checkpoint_type": checkpoint_type, "proposal": proposal, "reasoning": reasoning,
+                       "review_only": False})
 
 
 def _resolve(decision: Dict[str, Any], proposal_model) -> Any:
@@ -79,6 +96,20 @@ def _resolve(decision: Dict[str, Any], proposal_model) -> Any:
         payload = decision.get("payload") or {}
         return type(proposal_model)(**{**proposal_model.model_dump(), **payload})
     return proposal_model
+
+
+def _review(review_type: str, summary: Dict[str, Any], message: str) -> None:
+    """A pure 'here's what happened, continue when ready' pause — nothing
+    to edit, only continue (approve) or stop here (reject). Deliberately
+    has NO work before the interrupt() call beyond building a dict from
+    already-computed state, so re-running this node from the top on
+    resume (LangGraph's own semantic, see the module docstring) is
+    completely free of side effects — there is nothing here that could
+    double-execute."""
+    decision = interrupt({"checkpoint_type": review_type, "proposal": summary, "reasoning": message,
+                           "review_only": True})
+    if (decision or {}).get("action") == "reject":
+        raise AbortRun(decision.get("reason") or f"User stopped after reviewing {review_type}.")
 
 
 def _log(state: PRISMState, decision_type: str, input_context: dict, decision_output: dict,
@@ -166,7 +197,7 @@ def node_intake(state: PRISMState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# DIAGNOSE + CLEANING PLAN — HITL checkpoint 1
+# DIAGNOSE + CLEANING PLAN — propose checkpoint
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_diagnose(state: PRISMState) -> dict:
@@ -185,7 +216,7 @@ def node_diagnose(state: PRISMState) -> dict:
         row_completeness=_j(miss.get("row_completeness")),
     ))
 
-    decision = _checkpoint("cleaning_plan", proposal.model_dump(), proposal.reasoning)
+    decision = _checkpoint("propose_cleaning", proposal.model_dump(), proposal.reasoning)
     plan = _resolve(decision, proposal)
     _log(state, "cleaning_recommendation", {"health": summary.get("signal")}, plan.model_dump(),
          plan.reasoning, requires_confirmation=True)
@@ -199,8 +230,9 @@ def node_diagnose(state: PRISMState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# CLEANING EXECUTION — no LLM, no HITL; each just applies its slice of the
-# single approved cleaning_plan
+# CLEANING EXECUTION — no LLM, no HITL of their own; each just applies its
+# slice of the single approved cleaning_plan. Result review happens once,
+# after all three have run (node_review_cleaning below).
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_clean_duplicates(state: PRISMState) -> dict:
@@ -280,12 +312,19 @@ def node_clean_missing_rows(state: PRISMState) -> dict:
                                   "Incomplete Rows Dropped", {"rows_removed": res["rows_removed"]})
 
     return {"dataset_versions": versions, "completed_nodes": _completed(state, "clean_missing_rows"),
-            "current_node": "encode_scale"}
+            "current_node": "review_cleaning"}
+
+
+def node_review_cleaning(state: PRISMState) -> dict:
+    _review("review_cleaning", state.get("cleaning_stats", {}),
+            "Cleaning is done — here's what changed on the real Cleaning page behind this panel. "
+            "Continue when you're ready to move on to Encoding & Scaling.")
+    return {"completed_nodes": _completed(state, "review_cleaning"), "current_node": "encode_scale"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# ENCODE / SCALE — Level-2 rule-based, no HITL (matches Encoding.jsx's own
-# suggestion-not-confirmation treatment of this decision)
+# ENCODE / SCALE — propose checkpoint (Level-2 rule-based, but now
+# confirmed like every other mutating stage, not auto-applied silently)
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_encode_scale(state: PRISMState) -> dict:
@@ -296,26 +335,38 @@ def node_encode_scale(state: PRISMState) -> dict:
     cat_cols = [c for c in profile["columns"] if c["inferred_type"] == "categorical" and c["name"] != target]
     num_cols = [c for c in profile["columns"] if c["inferred_type"] == "numeric" and c["name"] != target]
 
-    decision: P.EncodingScalingDecision = decide(P.EncodingScalingDecision, P.SYSTEM_PROMPT,
+    proposal: P.EncodingScalingDecision = decide(P.EncodingScalingDecision, P.SYSTEM_PROMPT,
         P.ENCODING_SCALING_PROMPT.format(
             categorical_cols=[c["name"] for c in cat_cols], numeric_cols=[c["name"] for c in num_cols],
             column_profile=_j(cat_cols + num_cols)))
 
-    versions = state.get("dataset_versions", [])
-    if decision.encoding or decision.scaling:
-        res = tools.encoding_apply(input_path, decision.encoding, decision.scaling)
-        versions = _register(state, "encoding", res["new_file_path"], 0, 0,
-                              "Encoding & Scaling", {"encoding": decision.encoding, "scaling": decision.scaling})
+    decision = _checkpoint("propose_encoding", proposal.model_dump(), proposal.reasoning)
+    plan = _resolve(decision, proposal)
     _log(state, "cleaning_recommendation", {"cat_cols": len(cat_cols), "num_cols": len(num_cols)},
-         {"encoding": decision.encoding, "scaling": decision.scaling}, decision.reasoning)
+         plan.model_dump(), plan.reasoning, requires_confirmation=True)
 
-    return {"dataset_versions": versions, "encoding_decisions": decision.encoding,
-            "scaling_decisions": decision.scaling, "completed_nodes": _completed(state, "encode_scale"),
-            "current_node": "set_goal"}
+    versions = state.get("dataset_versions", [])
+    if plan.encoding or plan.scaling:
+        res = tools.encoding_apply(input_path, plan.encoding, plan.scaling)
+        versions = _register(state, "encoding", res["new_file_path"], 0, 0,
+                              "Encoding & Scaling", {"encoding": plan.encoding, "scaling": plan.scaling})
+
+    return {"dataset_versions": versions, "encoding_decisions": plan.encoding,
+            "scaling_decisions": plan.scaling, "completed_nodes": _completed(state, "encode_scale"),
+            "current_node": "review_encoding"}
+
+
+def node_review_encoding(state: PRISMState) -> dict:
+    _review("review_encoding",
+            {"encoding": state.get("encoding_decisions", {}), "scaling": state.get("scaling_decisions", {})},
+            "Encoding & Scaling is applied — here's what changed on the real page behind this panel. "
+            "Continue when you're ready to confirm the optimization goal.")
+    return {"completed_nodes": _completed(state, "review_encoding"), "current_node": "set_goal"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# GOAL — HITL checkpoint 2 (surfaced only after real stats exist)
+# GOAL — propose checkpoint (no dataset mutation of its own, so no review
+# step - nothing new appears on a page for this one)
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_set_goal(state: PRISMState) -> dict:
@@ -324,7 +375,7 @@ def node_set_goal(state: PRISMState) -> dict:
         target_column=state.get("target_column"), task_type=state.get("task_type"),
         user_intent=state.get("user_intent", ""), target_quality=_j(target_quality)))
 
-    decision = _checkpoint("goal_confirmation", proposal.model_dump(), proposal.goal_reasoning)
+    decision = _checkpoint("propose_goal", proposal.model_dump(), proposal.goal_reasoning)
     goal = _resolve(decision, proposal)
     _log(state, "goal_detection", {"target_quality": target_quality}, goal.model_dump(),
          goal.goal_reasoning, requires_confirmation=True)
@@ -335,7 +386,7 @@ def node_set_goal(state: PRISMState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# FEATURE ENGINEERING — HITL checkpoint 3 (skipped on the combine-consume
+# FEATURE ENGINEERING — propose checkpoint (skipped on the combine-consume
 # pass — that plan was already approved at feature_select's own checkpoint)
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -356,7 +407,7 @@ def node_feature_engineer(state: PRISMState) -> dict:
                               "Feature Engineering", {"combined": applied})
         return {"dataset_versions": versions, "engineered_features": state.get("engineered_features", []) + applied,
                 "feature_combination_instructions": [], "completed_nodes": _completed(state, "feature_engineer"),
-                "current_node": "sample"}
+                "current_node": "review_feature_engineering"}
 
     profile = tools.feature_profile(input_path)
     numeric_stats = [{"name": c["name"], **c.get("stats", {})} for c in profile["columns"] if c["inferred_type"] == "numeric"]
@@ -364,7 +415,7 @@ def node_feature_engineer(state: PRISMState) -> dict:
         P.FEATURE_ENGINEERING_PROMPT.format(numeric_stats=_j(numeric_stats),
                                              target_column=state.get("target_column"), task_type=state.get("task_type")))
 
-    decision = _checkpoint("feature_engineering_plan", proposal.model_dump(), proposal.reasoning)
+    decision = _checkpoint("propose_feature_engineering", proposal.model_dump(), proposal.reasoning)
     plan = _resolve(decision, proposal)
     _log(state, "cleaning_recommendation", {"numeric_cols": len(numeric_stats)}, plan.model_dump(),
          plan.reasoning, requires_confirmation=True)
@@ -386,18 +437,26 @@ def node_feature_engineer(state: PRISMState) -> dict:
 
     return {"dataset_versions": versions, "bucketized_cols": bucketized,
             "engineered_features": state.get("engineered_features", []) + created,
-            "completed_nodes": _completed(state, "feature_engineer"), "current_node": "sample"}
+            "completed_nodes": _completed(state, "feature_engineer"), "current_node": "review_feature_engineering"}
+
+
+def node_review_feature_engineering(state: PRISMState) -> dict:
+    _review("review_feature_engineering",
+            {"bucketized": state.get("bucketized_cols", []), "created": state.get("engineered_features", [])},
+            "Feature engineering is applied — here's what changed on the real page behind this panel. "
+            "Continue when you're ready to move on to Sampling.")
+    return {"completed_nodes": _completed(state, "review_feature_engineering"), "current_node": "sample"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # SAMPLING (eval_balance folded in — both read check_target_balance via
-# sampling_router.profile_dataset) — no HITL, cheap and reversible
+# sampling_router.profile_dataset) — propose checkpoint
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_sample(state: PRISMState) -> dict:
     if state.get("task_type") == "clustering":
         return {"sampling_applied": False, "completed_nodes": _completed(state, "sample"),
-                "current_node": "feature_select"}
+                "current_node": "review_sampling"}
 
     input_path = resolve_display_path(state, "sampling")
     profile = tools.sampling_profile(input_path, state.get("target_column"), state.get("task_type"))
@@ -416,23 +475,38 @@ def node_sample(state: PRISMState) -> dict:
     # always a safe fallback regardless of what the model chose.
     if categorical_cols and proposal.method in ("adasyn", "borderline_smote", "kmeans_smote"):
         proposal.method = "oversample"
+
+    decision = _checkpoint("propose_sampling", proposal.model_dump(), proposal.reasoning)
+    plan = _resolve(decision, proposal)
+    # Re-apply the same guard after resolve too, in case an edit tried to
+    # set an invalid method while categorical columns are still present.
+    if categorical_cols and plan.method in ("adasyn", "borderline_smote", "kmeans_smote"):
+        plan.method = "oversample"
     _log(state, "cleaning_recommendation", {"target_quality": target_quality, "categorical_cols": categorical_cols},
-         proposal.model_dump(), proposal.reasoning)
+         plan.model_dump(), plan.reasoning, requires_confirmation=True)
 
     versions = state.get("dataset_versions", [])
-    if proposal.apply_sampling and proposal.method:
-        res = tools.sampling_apply(input_path, proposal.method, sample_pct=proposal.sample_pct,
+    if plan.apply_sampling and plan.method:
+        res = tools.sampling_apply(input_path, plan.method, sample_pct=plan.sample_pct,
                                     target_col=state.get("target_column"), task_type=state.get("task_type"))
         versions = _register(state, "sampling", res["new_file_path"], res["row_count"], res["col_count"],
-                              "Sampled Version", {"method": proposal.method})
+                              "Sampled Version", {"method": plan.method})
 
-    return {"dataset_versions": versions, "sampling_applied": proposal.apply_sampling,
-            "sampling_method": proposal.method, "completed_nodes": _completed(state, "sample"),
-            "current_node": "feature_select"}
+    return {"dataset_versions": versions, "sampling_applied": plan.apply_sampling,
+            "sampling_method": plan.method, "completed_nodes": _completed(state, "sample"),
+            "current_node": "review_sampling"}
+
+
+def node_review_sampling(state: PRISMState) -> dict:
+    _review("review_sampling",
+            {"applied": state.get("sampling_applied", False), "method": state.get("sampling_method")},
+            "Sampling is done — here's what changed on the real page behind this panel. "
+            "Continue when you're ready to move on to Feature Selection.")
+    return {"completed_nodes": _completed(state, "review_sampling"), "current_node": "feature_select"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# FEATURE SELECTION — HITL checkpoint 4; combine-loop pass counter
+# FEATURE SELECTION — propose checkpoint; combine-loop pass counter
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_feature_select(state: PRISMState) -> dict:
@@ -447,7 +521,7 @@ def node_feature_select(state: PRISMState) -> dict:
     if pass_number >= 1:
         proposal.combine_instead = []
 
-    decision = _checkpoint("feature_selection_plan", proposal.model_dump(), proposal.reasoning)
+    decision = _checkpoint("propose_feature_selection", proposal.model_dump(), proposal.reasoning)
     plan = _resolve(decision, proposal)
     _log(state, "cleaning_recommendation", {"pass": pass_number, "n_features": len(analysis["features"])},
          plan.model_dump(), plan.reasoning, requires_confirmation=True)
@@ -465,11 +539,19 @@ def node_feature_select(state: PRISMState) -> dict:
 
     return {"dataset_versions": versions, "selected_features": plan.features_to_keep,
             "dropped_features": plan.features_to_drop, "feature_selection_pass": pass_number + 1,
-            "completed_nodes": _completed(state, "feature_select"), "current_node": "select_model"}
+            "completed_nodes": _completed(state, "feature_select"), "current_node": "review_feature_selection"}
+
+
+def node_review_feature_selection(state: PRISMState) -> dict:
+    _review("review_feature_selection",
+            {"kept": state.get("selected_features", []), "dropped": state.get("dropped_features", [])},
+            "Feature selection is applied — here's what changed on the real page behind this panel. "
+            "Continue when you're ready to confirm the model.")
+    return {"completed_nodes": _completed(state, "review_feature_selection"), "current_node": "select_model"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# MODEL SELECTION — HITL checkpoint 5
+# MODEL SELECTION — propose checkpoint
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_select_model(state: PRISMState) -> dict:
@@ -501,7 +583,7 @@ def node_select_model(state: PRISMState) -> dict:
     if proposal.model_name not in valid_models:
         proposal.model_name = valid_models[0]
 
-    decision = _checkpoint("model_selection_plan", proposal.model_dump(), proposal.reasoning)
+    decision = _checkpoint("propose_model_selection", proposal.model_dump(), proposal.reasoning)
     plan = _resolve(decision, proposal)
     _log(state, "model_selection", {"defaults": defaults, "elbow": elbow_ctx}, plan.model_dump(),
          plan.reasoning, requires_confirmation=True)
@@ -584,7 +666,9 @@ def node_retry_train(state: PRISMState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# EVAL METRICS — loop-back proposals are HITL-gated (checkpoint 6)
+# EVAL METRICS — no checkpoint of its own for accept/retry (retries are
+# bounded and autonomous within TRAINING_ATTEMPT_CAP); loop-back proposals
+# ARE HITL-gated, since re-running earlier stages is expensive.
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_eval_metrics(state: PRISMState) -> dict:
@@ -604,13 +688,11 @@ def node_eval_metrics(state: PRISMState) -> dict:
         _log(state, "model_selection", {"latest_metrics": latest.get("metrics")}, proposal.model_dump(), proposal.reasoning)
         if history:
             history[-1] = {**history[-1], "verdict": proposal.verdict}
-        # "accept" is a DECISION value, not a graph node name - the real
-        # next node once accepted is "explain" (found live: the original
-        # code set current_node="accept" directly, which crashed the
-        # eval_metrics -> {...} conditional-edge lookup with a bare
-        # KeyError('accept') the first time a run actually reached this
-        # branch, since "accept" was never a key in EVAL_METRICS_MAP).
-        next_node = "retry_train" if proposal.action == "retry_train" else "explain"
+        # "accept" -> review the final trained result before moving on to
+        # Feature Importance/Learning Curve; "retry_train" loops straight
+        # back into another attempt with no review in between (only the
+        # FINAL settled result gets reviewed, not every intermediate retry).
+        next_node = "retry_train" if proposal.action == "retry_train" else "review_training"
         return {"model_history": history, "_retry_param_adjustments": proposal.param_adjustments,
                 "completed_nodes": _completed(state, "eval_metrics"), "current_node": next_node}
 
@@ -623,6 +705,17 @@ def node_eval_metrics(state: PRISMState) -> dict:
     next_node = "sample" if plan.action == "loop_back_sample" else "feature_select"
     return {"loop_back_count": state.get("loop_back_count", 0) + 1,
             "completed_nodes": _completed(state, "eval_metrics"), "current_node": next_node}
+
+
+def node_review_training(state: PRISMState) -> dict:
+    history = state.get("model_history", [])
+    latest = history[-1] if history else {}
+    _review("review_training",
+            {"model_name": state.get("model_name"), "metrics": latest.get("metrics", {}),
+             "attempts": len(history)},
+            "Training is done — here's the trained model's real result on the page behind this panel. "
+            "Continue when you're ready to see Feature Importance and the Learning Curve.")
+    return {"completed_nodes": _completed(state, "review_training"), "current_node": "explain"}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -651,7 +744,7 @@ def node_explain(state: PRISMState) -> dict:
 
     if state.get("loop_back_count", 0) >= LOOP_BACK_CAP:
         return {"shap_result": shap_result, "learning_curve_result": lc_result, "pattern_type": pattern_type,
-                "completed_nodes": _completed(state, "explain"), "current_node": "report"}
+                "completed_nodes": _completed(state, "explain"), "current_node": "review_explain"}
 
     # SHAP's own beeswarm ranking is the one feature-importance signal
     # computed for EVERY model (weight/gain/coverage only exist for tree
@@ -668,21 +761,30 @@ def node_explain(state: PRISMState) -> dict:
     if not proposal.should_loop_back:
         _log(state, "insight_generation", {"pattern_type": pattern_type}, proposal.model_dump(), proposal.reasoning)
         return {"shap_result": shap_result, "learning_curve_result": lc_result, "pattern_type": pattern_type,
-                "completed_nodes": _completed(state, "explain"), "current_node": "report"}
+                "completed_nodes": _completed(state, "explain"), "current_node": "review_explain"}
 
     decision = _checkpoint("loop_back_proposal", proposal.model_dump(), proposal.reasoning)
     plan = _resolve(decision, proposal)
     _log(state, "insight_generation", {"pattern_type": pattern_type}, plan.model_dump(), plan.reasoning,
          requires_confirmation=True)
 
-    next_node = plan.target_stage if plan.should_loop_back and plan.target_stage else "report"
+    next_node = plan.target_stage if plan.should_loop_back and plan.target_stage else "review_explain"
     return {"shap_result": shap_result, "learning_curve_result": lc_result, "pattern_type": pattern_type,
             "loop_back_count": state.get("loop_back_count", 0) + (1 if plan.should_loop_back else 0),
             "completed_nodes": _completed(state, "explain"), "current_node": next_node}
 
 
+def node_review_explain(state: PRISMState) -> dict:
+    _review("review_explain",
+            {"pattern_type": state.get("pattern_type")},
+            "Feature Importance and the Learning Curve are computed — here's what they show on the real "
+            "pages behind this panel. Continue when you're ready for the final report.")
+    return {"completed_nodes": _completed(state, "review_explain"), "current_node": "report"}
+
+
 # ─────────────────────────────────────────────────────────────────────────
-# REPORT + END — no LLM
+# REPORT + END — no LLM, no HITL (nothing left to confirm — the run just
+# ends here and the real Report page is what the user lands on)
 # ─────────────────────────────────────────────────────────────────────────
 
 def node_report(state: PRISMState) -> dict:

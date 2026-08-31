@@ -12,8 +12,9 @@ import FeatureImportancePage from './pages/FeatureImportance';
 import LearningCurvePage from './pages/LearningCurve';
 import SimulatorPage from './pages/Simulator';
 import ReportPage from './pages/Report';
+import LandingPage from './pages/Landing';
 import AutoModePanel from './components/AutoModePanel';
-import { authAPI, projectsAPI, datasetsAPI, versionsAPI } from './api';
+import { projectsAPI, datasetsAPI, versionsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
 import { useTheme } from './theme';
@@ -50,36 +51,26 @@ function AdvanceButton({ C, label, onClick, disabled, working }) {
 // CleaningPage component against it. Replace this file once the actual
 // App.jsx / JourneyMap.jsx routing is brought in.
 //
-// It now also bootstraps a real Django user + project on load (silently
-// registers/logs in a fixed dev account, reuses one project) so the
-// Cleaning page's version-history bar has a real projectId + JWT to persist
-// against. This is throwaway plumbing for local testing only — the real
-// app will get projectId from actual login + a project picker, not this.
+// Real login/register now happens on Landing.jsx (see the 'landing' stage
+// below) — this bit of plumbing is just what turns "a token now exists in
+// localStorage" into "a real project to work in," shared by both the
+// just-authenticated path (handleAuthenticated) and a returning user's
+// mount-time re-hydration (the effect further down).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEV_EMAIL    = 'cleaning_dev@example.com';
-const DEV_PASSWORD = 'dev-preview-pass-1234';
-const DEV_PROJECT_NAME = 'Cleaning Page Preview';
+const DEFAULT_PROJECT_NAME = 'My First Project';
 
-async function bootstrapDevProject() {
-  // Log in; if the dev account doesn't exist yet, register it then log in.
-  let loginRes;
-  try {
-    loginRes = await authAPI.login({ username: DEV_EMAIL, password: DEV_PASSWORD });
-  } catch {
-    await authAPI.register({ email: DEV_EMAIL, password: DEV_PASSWORD, first_name: 'Dev' });
-    loginRes = await authAPI.login({ username: DEV_EMAIL, password: DEV_PASSWORD });
-  }
-  localStorage.setItem('access_token', loginRes.data.access);
-  localStorage.setItem('refresh_token', loginRes.data.refresh);
-
-  // Reuse the dev project if one already exists, otherwise create it.
+async function ensureProject(name) {
+  // Reuse the user's existing project with this name if one exists,
+  // otherwise create it. Assumes a valid access_token is already in
+  // localStorage — api.js's djangoAPI request interceptor attaches it
+  // automatically to both calls below.
   const { data: projects } = await projectsAPI.list();
-  const existing = projects.find(p => p.name === DEV_PROJECT_NAME);
+  const existing = projects.find(p => p.name === name);
   if (existing) return existing.id;
 
   const { data: created } = await projectsAPI.create({
-    name: DEV_PROJECT_NAME,
+    name,
     mode: 'guided_manual',
   });
   return created.id;
@@ -148,7 +139,12 @@ function LoadDatasetForm({ onLoad, bootstrapError }) {
 
 function App() {
   const { C } = useTheme();
-  const [stage, setStage] = useState('upload'); // 'upload' | 'diagnose' | 'load-cleaning' | 'cleaning'
+  // 'landing' | 'upload' | 'diagnose' | 'load-cleaning' | 'cleaning' | ...
+  // A returning user who already has a token skips straight past Landing —
+  // Landing/AuthSection is a first-visit gate, not a page you can navigate
+  // back to once signed in (see the mount effect below for the matching
+  // re-hydration of `projectId` on that path).
+  const [stage, setStage] = useState(() => (localStorage.getItem('access_token') ? 'upload' : 'landing'));
   const [filePath, setFilePath] = useState(null);
   const [projectId, setProjectId] = useState(null);
   const [bootstrapError, setBootstrapError] = useState('');
@@ -170,52 +166,172 @@ function App() {
   // Auto Mode — a LangGraph-driven agent (backend-fastapi/auto_mode/) that
   // runs the SAME pipeline this file's manual stages walk through by hand,
   // registering the SAME kind of Django dataset versions along the way.
-  // Rendered as an overlay (not a separate stage) so it can sit on top of
-  // whichever manual page is currently active, per its own design — see
-  // handleAutoModeComplete below for exactly how it hands control back.
+  // Rendered as a persistent overlay (see the bottom of this file, outside
+  // renderStage()) so the REAL underlying page can change live underneath
+  // it as the run progresses — the user watches Cleaning/Encoding/etc.
+  // actually update with real data at each step, not a disconnected modal
+  // sitting frozen over the Upload page for the whole run.
   const [showAutoMode, setShowAutoMode] = useState(false);
+  const [preparingAutoMode, setPreparingAutoMode] = useState(false);
+  // Collapsed to a small reopenable tab, WITHOUT unmounting AutoModePanel —
+  // the panel owns the run's runId/polling in its own component state, so
+  // unmounting it on "close" (the old behavior) killed the connection to an
+  // active run entirely: reopening Auto Mode started an unrelated SECOND
+  // run rather than reconnecting to the one still going on the backend.
+  // showAutoMode now means "a run is being tracked at all" (stays true for
+  // the whole run); autoModeMinimized is purely which of the two visual
+  // forms it takes, toggled freely without affecting the run underneath.
+  const [autoModeMinimized, setAutoModeMinimized] = useState(false);
 
-  // Maps an auto_mode graph node name to the real STEP_ORDER value it
-  // corresponds to (for furthestOrder) and to the manual stage key that
-  // shows the equivalent page (for navigation) — mirrors STEP_ORDER's own
-  // step-name vocabulary, not a new one.
+  // Maps an auto_mode graph node name to the real STEP_ORDER key it
+  // corresponds to (for furthestOrder AND for resolving the actual file
+  // path) and to the manual stage key that shows the equivalent page (for
+  // navigation) — mirrors STEP_ORDER's own step-name vocabulary, not a new
+  // one. "end" (node_end's own current_node value once the graph truly
+  // finishes) deliberately maps to 'report', same as the real "report"
+  // node - completion and the report node land in the same place.
+  // The review_* entries are the crux of "the agent works in the background
+  // without showing results": each mutating stage's backend node
+  // (clean_duplicates..clean_missing_rows, encode_scale, sample, ...) runs
+  // to completion and pauses at its OWN review_* node's interrupt() call —
+  // see auto_mode/nodes.py's module docstring. While paused there, the
+  // checkpointed current_node IS that review_* node's name (set by the
+  // mutating node's own return, one node earlier), not the mutating node's
+  // name itself — LangGraph never exposes an intermediate poll-visible
+  // state for clean_duplicates/clean_outliers/etc. since they all run
+  // synchronously in one graph.invoke() with no pause in between. Without
+  // an entry here for e.g. "review_cleaning", syncToAutoModeNode found
+  // nothing to map it to and returned immediately — the real page never
+  // updated to show the just-finished result, leaving the user staring at
+  // whatever page was current before (confirmed live: stuck on Diagnose
+  // through the entire Cleaning phase, exactly the reported symptom).
   const AUTOMODE_NODE_INFO = {
-    intake: { order: STEP_ORDER.upload, stage: 'upload' },
-    diagnose: { order: STEP_ORDER.diagnose, stage: 'diagnose' },
-    clean_duplicates: { order: STEP_ORDER.cleaning_duplicates, stage: 'cleaning' },
-    clean_outliers: { order: STEP_ORDER.cleaning_outliers, stage: 'cleaning' },
-    clean_missing_cols: { order: STEP_ORDER.cleaning_missing, stage: 'cleaning' },
-    clean_missing_rows: { order: STEP_ORDER.cleaning_missing, stage: 'cleaning' },
-    encode_scale: { order: STEP_ORDER.encoding, stage: 'encoding' },
-    set_goal: { order: STEP_ORDER.encoding, stage: 'encoding' },
-    feature_engineer: { order: STEP_ORDER.feature_engineering, stage: 'feature_engineering' },
-    sample: { order: STEP_ORDER.sampling, stage: 'sampling' },
-    feature_select: { order: STEP_ORDER.feature_selection, stage: 'feature_selection' },
-    select_model: { order: STEP_ORDER.training, stage: 'training' },
-    train: { order: STEP_ORDER.training, stage: 'training' },
-    retry_train: { order: STEP_ORDER.training, stage: 'training' },
-    eval_metrics: { order: STEP_ORDER.training, stage: 'training' },
-    explain: { order: STEP_ORDER.feature_impact, stage: 'feature_impact' },
-    report: { order: STEP_ORDER.report, stage: 'report' },
-    end: { order: STEP_ORDER.report, stage: 'report' },
+    intake: { stepKey: 'upload', stage: 'upload' },
+    diagnose: { stepKey: 'diagnose', stage: 'diagnose' },
+    clean_duplicates: { stepKey: 'cleaning_duplicates', stage: 'cleaning' },
+    clean_outliers: { stepKey: 'cleaning_outliers', stage: 'cleaning' },
+    clean_missing_cols: { stepKey: 'cleaning_missing', stage: 'cleaning' },
+    clean_missing_rows: { stepKey: 'cleaning_missing', stage: 'cleaning' },
+    review_cleaning: { stepKey: 'cleaning_missing', stage: 'cleaning' },
+    encode_scale: { stepKey: 'encoding', stage: 'encoding' },
+    review_encoding: { stepKey: 'encoding', stage: 'encoding' },
+    set_goal: { stepKey: 'encoding', stage: 'encoding' },
+    feature_engineer: { stepKey: 'feature_engineering', stage: 'feature_engineering' },
+    review_feature_engineering: { stepKey: 'feature_engineering', stage: 'feature_engineering' },
+    sample: { stepKey: 'sampling', stage: 'sampling' },
+    review_sampling: { stepKey: 'sampling', stage: 'sampling' },
+    feature_select: { stepKey: 'feature_selection', stage: 'feature_selection' },
+    review_feature_selection: { stepKey: 'feature_selection', stage: 'feature_selection' },
+    select_model: { stepKey: 'training', stage: 'training' },
+    train: { stepKey: 'training', stage: 'training' },
+    retry_train: { stepKey: 'training', stage: 'training' },
+    eval_metrics: { stepKey: 'training', stage: 'training' },
+    review_training: { stepKey: 'training', stage: 'training' },
+    explain: { stepKey: 'feature_impact', stage: 'feature_impact' },
+    review_explain: { stepKey: 'feature_impact', stage: 'feature_impact' },
+    report: { stepKey: 'report', stage: 'report' },
+    end: { stepKey: 'report', stage: 'report' },
   };
 
-  // Exact sequence: refresh real versions from Django, unlock TopNav as
-  // far as the run actually got (never via advance() here — advance()'s
-  // own STAGE_ORDER_OVERRIDE-based computation would under-report progress
-  // for a stage key like 'cleaning' that covers 3 STEP_ORDER slots), then
-  // land the user on the matching manual page and close the panel. Runs
-  // the same way whether the run finished cleanly or was rejected/stopped
-  // partway — either way, everything up to the last completed node is a
-  // real, registered dataset version.
-  const handleAutoModeComplete = async (finalStatus) => {
+  // getDisplayPath(stepKey)'s own resolution rule (see useVersionHistory.js):
+  // that step's own latest registered version if it has one, else the
+  // nearest strictly-earlier version. Reimplemented here against a versions
+  // array fetched fresh JUST NOW, rather than calling versionHistory's own
+  // getDisplayPath right after versionHistory.refresh() — React state
+  // updates don't apply until the next render, so the hook's OWN versions
+  // array would still be the stale pre-refresh one at this point in the
+  // same function call (the exact same reason goToCleaning below fetches
+  // versionsAPI.list directly instead of trusting the hook immediately
+  // after refresh()).
+  const resolveDisplayPathFrom = (freshVersions, stepKey) => {
+    const order = STEP_ORDER[stepKey];
+    const own = freshVersions.filter(v => v.step_name === stepKey);
+    if (own.length) return own.reduce((a, b) => (a.version_number > b.version_number ? a : b)).file_path;
+    const earlier = freshVersions.filter(v => STEP_ORDER[v.step_name] < order);
+    if (!earlier.length) return null;
+    return earlier.reduce((a, b) => (STEP_ORDER[a.step_name] > STEP_ORDER[b.step_name] ? a : b)).file_path;
+  };
+
+  // TrainTest.jsx persists modelHistory/activeResult to localStorage under
+  // "prism_training_<filePath>__<key>" (see its own usePersisted), scoped by
+  // whatever getDisplayPath('training') resolves to for THAT dataset — the
+  // exact same resolution `resolveDisplayPathFrom` above does. Auto Mode
+  // trains real models through the SAME training_router.train_model() call
+  // (auto_mode/tools.py calls it in-process), but never wrote into this
+  // same storage, so a model trained by Auto Mode was real and downloadable
+  // (App.jsx's lastModelPath/reportContext knew about it) yet invisible the
+  // moment the user landed back on Training manually — nothing had ever
+  // populated modelHistory for that page to read. Written here, once, at
+  // the exact moment the real training file path is known (right after
+  // syncToAutoModeNode resolves it for the 'training' stepKey), so
+  // TrainTest.jsx picks it up under the identical key it will independently
+  // compute for itself on mount. `/auto-mode/status`'s model_metrics IS
+  // essentially the raw training_router response (nodes.py's _make_attempt
+  // keeps every field except the 3 heavy viz blobs) - already the exact
+  // shape TrainTest.jsx's modelHistory entries/activeResult expect, no
+  // reshaping needed. Deduped by model_id so re-polling the same status
+  // never creates duplicate history rows.
+  const TRAINING_LS_PREFIX = 'prism_training_';
+  const injectAutoModeTrainingResult = (trainingFilePath, statusData) => {
+    const result = statusData?.model_metrics;
+    if (!trainingFilePath || !result?.model_id) return;
+    const historyKey = `${TRAINING_LS_PREFIX}${trainingFilePath}__history`;
+    const activeKey = `${TRAINING_LS_PREFIX}${trainingFilePath}__active_result`;
+    try {
+      const raw = localStorage.getItem(historyKey);
+      const history = raw ? JSON.parse(raw) : [];
+      if (!history.some((m) => m.model_id === result.model_id)) {
+        localStorage.setItem(historyKey, JSON.stringify([result, ...history]));
+      }
+      localStorage.setItem(activeKey, JSON.stringify(result));
+    } catch { /* localStorage unavailable — the model is still real and downloadable via lastModelPath */ }
+  };
+
+  // Shared by every live-progress tick AND the final completion: resolve
+  // and set the real current filePath (Cleaning.jsx, unlike every other
+  // page, reads this raw prop directly rather than deriving its own via
+  // getDisplayPath, so without this it would keep showing whatever dataset
+  // was current when Auto Mode started, not what it's actually produced),
+  // refresh the shared hook too (so every OTHER page's own getDisplayPath
+  // calls see fresh data on their next render), unlock TopNav that far
+  // (never via advance() — its own STAGE_ORDER_OVERRIDE computation would
+  // under-report progress for a stage key like 'cleaning' that covers 3
+  // STEP_ORDER slots), then actually switch to the matching page.
+  const syncToAutoModeNode = async (nodeName, statusData) => {
+    const info = AUTOMODE_NODE_INFO[nodeName];
+    if (!info || !projectId) return;
+    try {
+      const { data: freshVersions } = await versionsAPI.list(projectId);
+      const resolvedPath = resolveDisplayPathFrom(freshVersions, info.stepKey);
+      if (resolvedPath) {
+        setFilePath(resolvedPath);
+        if (info.stepKey === 'training') injectAutoModeTrainingResult(resolvedPath, statusData);
+      }
+    } catch { /* Django unreachable this tick - stage still switches below */ }
     await versionHistory.refresh();
-    // Mirror exactly what a MANUAL TrainTest.jsx run hands up via
-    // onUpdateData (see the 'training'/'feature_selection' stage blocks
-    // below) — without this, Report/Feature Importance/Learning Curve/
-    // Simulator have nothing to read, since they all key off this same
-    // App-level state regardless of whether Manual or Auto Mode produced
-    // the model.
+    const order = STEP_ORDER[info.stepKey];
+    if (order != null) setFurthestOrder(prev => Math.max(prev, order));
+    setStage(info.stage);
+  };
+
+  // Called on every poll tick where current_node has genuinely changed
+  // (see AutoModePanel.jsx) — this is what makes the page behind the panel
+  // visibly update in real time instead of staying frozen on Upload for
+  // the whole run.
+  const handleAutoModeProgress = (statusData) => {
+    syncToAutoModeNode(statusData.current_node, statusData);
+  };
+
+  // Runs once, when the graph actually finishes (status: completed —
+  // AutoModePanel only calls this once, see its own status effect) or the
+  // panel is otherwise closing after a terminal state. Mirrors exactly
+  // what a MANUAL TrainTest.jsx run hands up via onUpdateData (see the
+  // 'training'/'feature_selection' stage blocks below) — without this,
+  // Report/Feature Importance/Learning Curve/Simulator have nothing to
+  // read, since they all key off this same App-level state regardless of
+  // whether Manual or Auto Mode produced the model.
+  const handleAutoModeComplete = async (finalStatus) => {
+    await syncToAutoModeNode(finalStatus.current_node, finalStatus);
     if (finalStatus.model_pkl_path) setLastModelPath(finalStatus.model_pkl_path);
     mergeReportContext({
       lastModelName: finalStatus.model_name,
@@ -223,14 +339,40 @@ function App() {
       trainRatio: finalStatus.train_ratio,
       selectedFeatures: finalStatus.selected_features,
     });
-    const completed = finalStatus.completed_nodes || [];
-    const lastNode = [...completed].reverse().find(n => AUTOMODE_NODE_INFO[n]);
-    if (lastNode) {
-      const { order, stage: targetStage } = AUTOMODE_NODE_INFO[lastNode];
-      setFurthestOrder(prev => Math.max(prev, order));
-      setStage(targetStage);
-    }
     setShowAutoMode(false);
+    setAutoModeMinimized(false);
+  };
+
+  // The Auto Mode trigger now lives in Upload.jsx's Step 3, right beside
+  // "Confirm & Start Diagnosis" — both fire the SAME onUpdateData(payload)
+  // first (which kicks off the real, fire-and-forget Django upload), but
+  // this path needs a REAL server-side file_path before it can start a run
+  // (FastAPI has to read the CSV from disk), so it polls Django directly
+  // for the upload to actually land instead of trusting filePath's React
+  // state, which the fire-and-forget upload hasn't necessarily updated by
+  // the time this same click handler runs (mirrors goToCleaning's own
+  // "await a real check before proceeding" pattern below).
+  const runAutoMode = async () => {
+    setPreparingAutoMode(true);
+    try {
+      if (!filePath && projectId) {
+        for (let i = 0; i < 16; i++) {
+          try {
+            const { data: freshVersions } = await versionsAPI.list(projectId);
+            const uploadVersion = freshVersions.find(v => v.step_name === 'upload');
+            if (uploadVersion) {
+              setFilePath(uploadVersion.file_path);
+              await versionHistory.refresh();
+              break;
+            }
+          } catch { /* Django not reachable yet / project not ready - keep polling */ }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    } finally {
+      setPreparingAutoMode(false);
+    }
+    setShowAutoMode(true);
   };
 
   // The highest STEP_ORDER value the user has ever advanced INTO via a
@@ -241,8 +383,13 @@ function App() {
   // itself, since that's where every session begins.
   const [furthestOrder, setFurthestOrder] = useState(STEP_ORDER.upload);
 
+  // A first-time visitor has no token yet — nothing to bootstrap until
+  // Landing/AuthSection stores one and calls handleAuthenticated (below)
+  // itself. A returning user with a still-valid token (stage already
+  // initialized to 'upload' above) gets their project re-established here.
   useEffect(() => {
-    bootstrapDevProject()
+    if (!localStorage.getItem('access_token')) return;
+    ensureProject(DEFAULT_PROJECT_NAME)
       .then(setProjectId)
       .catch(e => setBootstrapError(e.message || 'unknown error'));
   }, []);
@@ -285,6 +432,19 @@ function App() {
     setStage(stageKey);
     const order = STEP_ORDER[stageKey] ?? STAGE_ORDER_OVERRIDE[stageKey];
     if (order != null) setFurthestOrder(prev => Math.max(prev, order));
+  };
+
+  // Called by Landing/AuthSection once real login/register tokens are
+  // stored in localStorage. Establishes (or reuses) this user's project,
+  // then enters the app on Upload — the same page a returning,
+  // already-authenticated user lands on directly via the mount effect above.
+  const handleAuthenticated = async () => {
+    try {
+      setProjectId(await ensureProject(DEFAULT_PROJECT_NAME));
+    } catch (e) {
+      setBootstrapError(e.message || 'unknown error');
+    }
+    advance('upload');
   };
 
   // Shared TopNav (frontend/src/components/TopNav.jsx) calls this with a
@@ -387,36 +547,38 @@ function App() {
     }
   };
 
+  // Everything below is the actual page for the current stage — pulled into
+  // its own function (closing over all the state/hooks above, same as the
+  // rest of this component) purely so the Auto Mode panel can be rendered
+  // ONCE, at this component's true top level (see the real `return` at the
+  // bottom of this file), as a persistent overlay that survives `stage`
+  // changing underneath it. Before this, the panel was nested inside only
+  // the 'upload' branch, so `syncToAutoModeNode`'s live setStage() calls had
+  // no visible effect — the panel just sat frozen over the Upload page for
+  // the whole run instead of the real page underneath actually changing.
+  //
   // Upload.jsx and Diagnose.jsx are both self-contained (client-side CSV
   // parsing, no server-visible file path), so this harness just chains them:
   // Upload's "Confirm & Start Diagnosis" -> Diagnose. Diagnose.jsx has no
   // "continue" action of its own (not part of its spec), so this harness adds
   // a small dev-only link below it to keep testing the existing Cleaning page.
+  function renderStage() {
+  if (stage === 'landing') {
+    return <LandingPage onAuthenticated={handleAuthenticated} />;
+  }
+
   if (stage === 'upload') {
     return (
-      <div>
-        <UploadPage
-          projectData={{ projectId }}
-          onUpdateData={handleUploadMeta}
-          onNext={() => advance('diagnose')}
-          active={navActive}
-          onNavigate={handleNavigate}
-          furthestOrder={furthestOrder}
-          onRunAutoMode={() => setShowAutoMode(true)}
-          canRunAutoMode={!!(filePath && uploadMeta)}
-        />
-        {showAutoMode && (
-          <AutoModePanel
-            projectId={projectId}
-            filePath={filePath}
-            taskType={uploadMeta?.taskType}
-            targetColumn={uploadMeta?.targetColumn}
-            userIntent={uploadMeta?.userIntent}
-            onClose={() => setShowAutoMode(false)}
-            onComplete={handleAutoModeComplete}
-          />
-        )}
-      </div>
+      <UploadPage
+        projectData={{ projectId }}
+        onUpdateData={handleUploadMeta}
+        onNext={() => advance('diagnose')}
+        active={navActive}
+        onNavigate={handleNavigate}
+        furthestOrder={furthestOrder}
+        onRunAutoMode={runAutoMode}
+        preparingAutoMode={preparingAutoMode}
+      />
     );
   }
 
@@ -718,6 +880,35 @@ function App() {
         </div>
       </div>
     </div>
+  );
+  } // end renderStage()
+
+  // The Auto Mode panel is rendered HERE, once, at the true top level —
+  // never inside renderStage() — specifically so it survives `stage`
+  // changing underneath it. Every live progress tick (handleAutoModeProgress)
+  // calls setStage() internally, which re-renders THIS component and
+  // re-invokes renderStage() with the new stage, swapping in the real
+  // Cleaning/Encoding/etc. page underneath while this panel stays mounted
+  // and open on top of it.
+  return (
+    <>
+      {renderStage()}
+      {showAutoMode && (
+        <AutoModePanel
+          projectId={projectId}
+          filePath={filePath}
+          taskType={uploadMeta?.taskType}
+          targetColumn={uploadMeta?.targetColumn}
+          userIntent={uploadMeta?.userIntent}
+          minimized={autoModeMinimized}
+          onMinimize={() => setAutoModeMinimized(true)}
+          onExpand={() => setAutoModeMinimized(false)}
+          onClose={() => { setShowAutoMode(false); setAutoModeMinimized(false); }}
+          onProgress={handleAutoModeProgress}
+          onComplete={handleAutoModeComplete}
+        />
+      )}
+    </>
   );
 }
 

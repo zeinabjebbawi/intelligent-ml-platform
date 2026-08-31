@@ -752,6 +752,11 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
   const [pcaData, setPcaData] = useState(null)
   const [pcaLoading, setPcaLoad] = useState(false)
   const [error,   setError]   = useState('')
+  // `error` stays load-only (gates the full-page early-return below —
+  // correct there, since nothing has rendered yet). loadPCA runs after the
+  // main analysis already rendered the whole page, so its failure must
+  // show inline in the Separability Check card, not blank everything else.
+  const [pcaError, setPcaError] = useState('')
   const [activeSection, setActiveSection] = useState('summary')
   const [showOriginalDist, setShowOrigDist] = useState(false)
 
@@ -811,6 +816,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
 
   const loadPCA = useCallback(async () => {
     if (pcaData || pcaLoading) return
+    setPcaError('')
     setPcaLoad(true)
     try {
       const result = await callViz('pca', {
@@ -848,7 +854,7 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
           return { ...prev, fingerprint: nextFp, signal: nextSignal }
         })
       }
-    } catch (e) { setError(e.message) }
+    } catch (e) { setPcaError(e.message) }
     finally { setPcaLoad(false) }
   }, [filePath, pcaData, pcaLoading, data, projectData?.targetColumn])
 
@@ -1070,6 +1076,13 @@ export default function DataReadinessPage({ projectData, onNext, onUpdateData,
                   color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
                 {pcaLoading ? '⏳ Computing PCA…' : '▶ Load PCA Analysis'}
               </button>
+              {pcaError && (
+                <div style={{ marginTop: 16, textAlign: 'left', background: C.dangerSoft,
+                  border: `1px solid ${C.danger}`, borderRadius: 10, padding: '10px 14px',
+                  color: C.danger, fontSize: 13 }}>
+                  ⚠ {pcaError}
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(260px,300px)', gap: 16 }}>

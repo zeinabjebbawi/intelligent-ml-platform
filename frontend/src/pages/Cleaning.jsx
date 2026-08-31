@@ -875,6 +875,11 @@ function DuplicatesTab({ filePath, inputFilePath, stepName, done, confirmBeforeA
   const [loading, setLoading]   = useState(false)
   const [removing, setRem]      = useState(false)
   const [error, setError]       = useState('')
+  // Separate from `error`: `error` gates the early-return below and must
+  // stay load-only — routing a post-load action failure through it would
+  // blank the whole tab (table, buttons, everything) behind a bare banner
+  // instead of just reporting the one action that failed.
+  const [actionError, setActionError] = useState('')
   const [previewMode, setPreviewMode] = useState('all') // 'all' | 'duplicates'
   const [originalRowCount, setOriginalRowCount] = useState(null)
 
@@ -914,12 +919,13 @@ function DuplicatesTab({ filePath, inputFilePath, stepName, done, confirmBeforeA
   const remove = async () => {
     const ok = await confirmBeforeAction(stepName)
     if (!ok) return
+    setActionError('')
     setRem(true)
     try {
       const res = await callCleaning('remove-duplicates', { file_path: filePath })
       await registerVersion(stepName, res.new_file_path, 'Duplicate Removed', res.new_row_count,
         { rows_removed: res.rows_removed })
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setRem(false) }
   }
 
@@ -1034,6 +1040,8 @@ function DuplicatesTab({ filePath, inputFilePath, stepName, done, confirmBeforeA
         </ExpandableChart>
       </div>
 
+      {actionError && <div style={{ marginTop: 16 }}><ErrBanner msg={actionError} /></div>}
+
       <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         {!done && data.total_dup_rows > 0 && (
           <button style={btn(C.danger, 'white', { padding: '12px 28px', fontSize: 14 })}
@@ -1074,6 +1082,12 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
   const [removing, setRemoving]     = useState(false)
   const [removingAll, setRemovingAll] = useState(false)
   const [error, setError]           = useState('')
+  // `error` stays load-only (gates the early-return below, blanking the
+  // whole tab is correct there — there's nothing else to show yet). Every
+  // action below runs AFTER globalData already loaded, so its failure must
+  // not blank the KPIs/column-list/chart that are already on screen —
+  // routed through this instead and rendered as one inline banner.
+  const [actionError, setActionError] = useState('')
   const [colListOpen, setColListOpen]   = useState(true)
   const [chartRailOpen, setChartRailOpen] = useState(true)
 
@@ -1135,11 +1149,12 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
     // the "column list says 50, remove button says 44" class of mismatch.
     setZThresh(3.0)
     setIqrMult(1.5)
+    setActionError('')
     try {
       const d = await callCleaning('profile-outliers-column', { file_path: filePath, column: col })
       setColData(d)
       setMethod(d.suggested_method)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setColLoad(false) }
   }
 
@@ -1178,6 +1193,7 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
     // which is the FIRST of two filePath transitions this operation
     // causes. Must stay suppressed across both, not just the second.
     suppressFetch.current = true
+    setActionError('')
     try {
       const ok = await confirmBeforeAction(stepName)
       if (!ok) return
@@ -1207,7 +1223,7 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
       setSelCol(null)
       setChartRailOpen(true)
       setColListOpen(true)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setRemoving(false); suppressFetch.current = false }
   }
 
@@ -1231,6 +1247,7 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
     // would otherwise let this effect fire against the wrong (reverted)
     // file for the moment before registerVersion re-adds the real one.
     suppressFetch.current = true
+    setActionError('')
     try {
       const ok = await confirmBeforeAction(stepName)
       if (!ok) return
@@ -1254,7 +1271,7 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
         column_summary: prev.column_summary.map(c => ({ ...c, n_outliers: 0 })),
       } : prev)
       refreshVisualsOnly(res.new_file_path)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setRemovingAll(false); suppressFetch.current = false }
   }
 
@@ -1268,11 +1285,11 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
   const [rechecking, setRechecking] = useState(false)
   const recheckOutliers = async () => {
     if (!filePath) return
-    setRechecking(true); setError('')
+    setRechecking(true); setActionError('')
     try {
       const d = await callCleaning('profile-outliers-global', { file_path: filePath })
       setGlobal(d)
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setRechecking(false) }
   }
 
@@ -1332,6 +1349,8 @@ function OutliersTab({ filePath, stepName, done, confirmBeforeAction, registerVe
           value={globalData.column_summary.filter(c => c.n_outliers > 0).length}
           subtitle="have extreme values" color={C.warning} />
       </div>
+
+      {actionError && <div style={{ marginBottom: 16 }}><ErrBanner msg={actionError} /></div>}
 
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}><InfoWidget text={infoText} /></div>
@@ -1630,6 +1649,10 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
   const [applyingAll, setApplyingAll] = useState(false)
   const [results, setResults]     = useState({})
   const [error, setError]         = useState('')
+  // `error` stays load-only (the early-return below). Every apply* action
+  // below runs after `data` already loaded, so a failure there must show
+  // inline, not blank the KPIs/column table that are already rendered.
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
     if (!filePath) return
@@ -1654,12 +1677,13 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
   const applyRowThreshold = async () => {
     const ok = await confirmBeforeAction(stepName)
     if (!ok) return
+    setActionError('')
     setRowApp(true)
     try {
       const res = await callCleaning('apply-row-threshold', { file_path: filePath, min_present: rowMin })
       await registerVersion(stepName, res.new_file_path, 'Incomplete Rows Dropped', res.new_row_count,
         { rows_removed: res.rows_removed })
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setRowApp(false) }
   }
 
@@ -1668,13 +1692,14 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
     if (!m) return
     const ok = await confirmBeforeAction(stepName)
     if (!ok) return
+    setActionError('')
     setApplying(col)
     try {
       const res = await callCleaning('apply-missing-column', { file_path: filePath, column: col, method: m })
       setResults(prev => ({ ...prev, [col]: res }))
       await registerVersion(stepName, res.new_file_path, 'Missing Values Imputed', null,
         { column: col, method: m })
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setApplying(null) }
   }
 
@@ -1696,6 +1721,7 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
     if (!cols.length) return
     const ok = await confirmBeforeAction(stepName)
     if (!ok) return
+    setActionError('')
     setApplyingAll(true)
     let currentPath = filePath
     try {
@@ -1707,7 +1733,7 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
       }
       await registerVersion(stepName, currentPath, 'Missing Values Imputed', null,
         { columns: cols, methods: cols.map(c => colMethod[c]) })
-    } catch (e) { setError(e.message) }
+    } catch (e) { setActionError(e.message) }
     finally { setApplyingAll(false) }
   }
 
@@ -1759,6 +1785,8 @@ function MissingTab({ filePath, stepName, done, confirmBeforeAction, registerVer
         <StatCard label="Complete rows" value={data.complete_rows} subtitle={`${data.complete_rows_pct}% of rows`} color={C.success} />
         <StatCard label="Total rows" value={data.total_rows} color={C.primary} />
       </div>
+
+      {actionError && <div style={{ marginBottom: 16 }}><ErrBanner msg={actionError} /></div>}
 
       {done && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
