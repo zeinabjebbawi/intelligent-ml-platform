@@ -2017,6 +2017,27 @@ export default function CleaningPage({ projectData, onNext, onUpdateData }) {
             id: v.id, stepName: v.step_name, label: v.version_label,
             filePath: v.file_path, rowCount: v.row_count,
           })))
+          // Land on whichever sub-tab is actually the MOST RECENT result,
+          // not always 'duplicates'. Each tab shows its OWN step's output
+          // file — correct in Manual Mode, where a user naturally reaches
+          // Outliers/Missing only after Duplicates already ran — but Auto
+          // Mode can complete all three sub-steps in one pass before the
+          // user ever sees this page. Landing on the (done, but now
+          // downstream-stale-looking) Duplicates tab by default made a
+          // just-finished run look like it hadn't picked up the LATER
+          // Missing-values imputation at all — confirmed live: the
+          // Duplicates tab's own preview still showed blank/un-imputed
+          // income cells even though "Missing Values Imputed" was already
+          // the current version on the bar above it. Only ever runs once,
+          // at this mount-time hydration — never overrides a tab the user
+          // clicks afterward.
+          const doneCleaningSteps = remoteVersions
+            .map(v => v.step_name)
+            .filter(s => ['cleaning_duplicates', 'cleaning_outliers', 'cleaning_missing'].includes(s))
+          if (doneCleaningSteps.length) {
+            const latest = doneCleaningSteps.sort((a, b) => STEP_ORDER[b] - STEP_ORDER[a])[0]
+            setActiveTab(latest === 'cleaning_missing' ? 'missing' : latest === 'cleaning_outliers' ? 'outliers' : 'duplicates')
+          }
         }
         setCleaningSettings(workflow.step_settings?.cleaning || {})
       } catch {
