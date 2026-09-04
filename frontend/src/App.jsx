@@ -13,8 +13,9 @@ import LearningCurvePage from './pages/LearningCurve';
 import SimulatorPage from './pages/Simulator';
 import ReportPage from './pages/Report';
 import LandingPage from './pages/Landing';
+import WorkspacePage from './pages/Workspace';
 import AutoModePanel from './components/AutoModePanel';
-import { projectsAPI, datasetsAPI, versionsAPI } from './api';
+import { datasetsAPI, versionsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
 import { useTheme } from './theme';
@@ -51,32 +52,12 @@ function AdvanceButton({ C, label, onClick, disabled, working }) {
 // CleaningPage component against it. Replace this file once the actual
 // App.jsx / JourneyMap.jsx routing is brought in.
 //
-// Real login/register now happens on Landing.jsx (see the 'landing' stage
-// below) — this bit of plumbing is just what turns "a token now exists in
-// localStorage" into "a real project to work in," shared by both the
-// just-authenticated path (handleAuthenticated) and a returning user's
-// mount-time re-hydration (the effect further down).
+// Real login/register now happens on Landing.jsx, and picking or creating a
+// project happens on Workspace.jsx (see the 'landing'/'workspace' stages
+// below) — both real Django-backed steps now, not this harness's concern.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_PROJECT_NAME = 'My First Project';
-
-async function ensureProject(name) {
-  // Reuse the user's existing project with this name if one exists,
-  // otherwise create it. Assumes a valid access_token is already in
-  // localStorage — api.js's djangoAPI request interceptor attaches it
-  // automatically to both calls below.
-  const { data: projects } = await projectsAPI.list();
-  const existing = projects.find(p => p.name === name);
-  if (existing) return existing.id;
-
-  const { data: created } = await projectsAPI.create({
-    name,
-    mode: 'guided_manual',
-  });
-  return created.id;
-}
-
-function LoadDatasetForm({ onLoad, bootstrapError }) {
+function LoadDatasetForm({ onLoad }) {
   const [path, setPath] = useState('');
 
   return (
@@ -99,17 +80,6 @@ function LoadDatasetForm({ onLoad, bootstrapError }) {
           The FastAPI server (port 8001) must be running and must be able to
           read this path directly — it does not need to be uploaded through Django.
         </p>
-        {bootstrapError && (
-          <div style={{
-            background: 'rgba(239,68,68,0.08)', border: '1px solid #ef4444',
-            borderRadius: 10, padding: '10px 14px', marginBottom: 16,
-            color: '#ef4444', fontSize: 12,
-          }}>
-            ⚠ Couldn't reach Django (port 8080) to set up version history: {bootstrapError}.
-            The Cleaning page will still work, but the versions bar won't persist
-            across refresh until Django is running.
-          </div>
-        )}
         <input
           type="text"
           value={path}
@@ -139,15 +109,14 @@ function LoadDatasetForm({ onLoad, bootstrapError }) {
 
 function App() {
   const { C } = useTheme();
-  // 'landing' | 'upload' | 'diagnose' | 'load-cleaning' | 'cleaning' | ...
-  // A returning user who already has a token skips straight past Landing —
-  // Landing/AuthSection is a first-visit gate, not a page you can navigate
-  // back to once signed in (see the mount effect below for the matching
-  // re-hydration of `projectId` on that path).
-  const [stage, setStage] = useState(() => (localStorage.getItem('access_token') ? 'upload' : 'landing'));
+  // 'landing' | 'workspace' | 'upload' | 'diagnose' | 'load-cleaning' | ...
+  // A returning user who already has a token skips straight past Landing to
+  // Workspace — Landing/AuthSection is a first-visit gate, not a page you
+  // can navigate back to once signed in. Workspace itself fetches the
+  // user's real project list, so there's nothing to pre-load here.
+  const [stage, setStage] = useState(() => (localStorage.getItem('access_token') ? 'workspace' : 'landing'));
   const [filePath, setFilePath] = useState(null);
   const [projectId, setProjectId] = useState(null);
-  const [bootstrapError, setBootstrapError] = useState('');
   const [uploadMeta, setUploadMeta] = useState(null);
   // Set by TrainTestPage's onUpdateData after a successful /training/train
   // call — the .pkl path of the most recently trained model, threaded into
@@ -383,17 +352,6 @@ function App() {
   // itself, since that's where every session begins.
   const [furthestOrder, setFurthestOrder] = useState(STEP_ORDER.upload);
 
-  // A first-time visitor has no token yet — nothing to bootstrap until
-  // Landing/AuthSection stores one and calls handleAuthenticated (below)
-  // itself. A returning user with a still-valid token (stage already
-  // initialized to 'upload' above) gets their project re-established here.
-  useEffect(() => {
-    if (!localStorage.getItem('access_token')) return;
-    ensureProject(DEFAULT_PROJECT_NAME)
-      .then(setProjectId)
-      .catch(e => setBootstrapError(e.message || 'unknown error'));
-  }, []);
-
   // Shared version-history hook (getDisplayPath/registerVersion/isStepDone)
   // for every journey-map page EXCEPT Cleaning, which still manages this
   // internally (untouched here — see frontend/src/hooks/useVersionHistory.js
@@ -435,16 +393,126 @@ function App() {
   };
 
   // Called by Landing/AuthSection once real login/register tokens are
-  // stored in localStorage. Establishes (or reuses) this user's project,
-  // then enters the app on Upload — the same page a returning,
-  // already-authenticated user lands on directly via the mount effect above.
-  const handleAuthenticated = async () => {
+  // stored in localStorage. No project to pick yet — that's Workspace's own
+  // job (it fetches the user's real project list itself) — so this just
+  // enters the app there, same as a returning already-authenticated user's
+  // lazy `stage` initializer above.
+  const handleAuthenticated = () => {
+    advance('workspace');
+  };
+
+  // Called by Workspace once it has actually created a real project via
+  // POST /api/projects/ — `project` is that real, already-saved record
+  // (id + name), not a request in flight. A brand-new project carries none
+  // of a previous project's context, so every piece of pipeline progress
+  // this file tracks is reset here — the same reset handleUploadMeta below
+  // already does for "a new dataset within the same project," just also
+  // covering filePath/uploadMeta here since a new PROJECT has no dataset at
+  // all yet, unlike a re-upload within an existing one.
+  const handleProjectCreated = (project) => {
+    setProjectId(project.id);
+    setFilePath(null);
+    setUploadMeta(null);
+    setLastModelPath(null);
+    setReportContext({});
+    setFurthestOrder(STEP_ORDER.upload);
     try {
-      setProjectId(await ensureProject(DEFAULT_PROJECT_NAME));
-    } catch (e) {
-      setBootstrapError(e.message || 'unknown error');
-    }
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('prism_training_'))
+        .forEach(k => localStorage.removeItem(k));
+    } catch {}
     advance('upload');
+  };
+
+  // dataset_versions never carries an entry for 'diagnose' (Diagnose.jsx is
+  // a pure client-side pass-through in Manual Mode — no Continue button of
+  // its own registers a version for it) or for anything training-onward
+  // (training produces a MODEL, not a transformed dataset file, so it never
+  // registers one either) — so this only ever needs to name a landing
+  // stage for the step keys real versions actually use. 'diagnose' is
+  // listed anyway, defensively, mapped to 'upload' rather than DiagnosePage
+  // itself: that page hard-requires a freshly client-parsed CSV (columns +
+  // rows), which "open a past project" fundamentally cannot supply.
+  const STEP_KEY_TO_STAGE = {
+    upload: 'upload', diagnose: 'upload',
+    cleaning_duplicates: 'cleaning', cleaning_outliers: 'cleaning', cleaning_missing: 'cleaning',
+    encoding: 'encoding', feature_engineering: 'feature_engineering', sampling: 'sampling',
+    data_readiness: 'data_readiness', feature_selection: 'feature_selection',
+    training: 'training', feature_impact: 'feature_impact',
+    learning_curve: 'learning_curve', simulator: 'simulator', report: 'report',
+  };
+
+  // Called by Workspace when the user opens a PAST project — the opposite
+  // half of handleProjectCreated above: instead of resetting to a blank
+  // slate, this rebuilds as much real progress as the backend can actually
+  // still tell us. Two durable sources, deliberately not WorkflowState's
+  // own current_step/completed_steps fields — nothing in this app has ever
+  // written to those (only Cleaning.jsx's step_settings caching touches
+  // /workflow/ at all), so they're permanently stuck at their
+  // just-created defaults and would be actively misleading here:
+  //   1. dataset_versions (versionsAPI.list) — the real, authoritative
+  //      transformation history, same source syncToAutoModeNode already
+  //      trusts. The furthest STEP_ORDER value among them says how far
+  //      the dataset pipeline itself got.
+  //   2. project.latest_dataset (now embedded in every /api/projects/
+  //      response — see ProjectSerializer) — target_column/task_type,
+  //      persisted at upload time by handleUploadMeta's own follow-up
+  //      PATCH. A project uploaded before that existed simply has both as
+  //      null; every downstream page already renders a graceful
+  //      "no target set" state for that case rather than crashing (see
+  //      e.g. FeatureSelection.jsx's own early-return), so this is a real
+  //      but non-catastrophic gap, not a blocker.
+  // Deliberately does NOT clear prism_training_* here (unlike
+  // handleProjectCreated/handleUploadMeta): those keys are scoped by the
+  // real resolved file PATH, not by project — re-opening the SAME project
+  // resolves to the SAME path, so a model trained in an earlier session is
+  // still there for TrainTest.jsx to show, not stale leftover state.
+  const handleProjectOpened = async (project) => {
+    setProjectId(project.id);
+    setFilePath(null);
+    setLastModelPath(null);
+    setReportContext({});
+
+    const ds = project.latest_dataset;
+    setUploadMeta(ds ? {
+      datasetFilename: ds.original_filename,
+      targetColumn: ds.target_column || null,
+      taskType: ds.task_type || null,
+    } : null);
+
+    if (!ds) { setFurthestOrder(STEP_ORDER.upload); setStage('upload'); return; }
+
+    try {
+      const { data: freshVersions } = await versionsAPI.list(project.id);
+      if (!freshVersions.length) { setFurthestOrder(STEP_ORDER.upload); setStage('upload'); return; }
+
+      const furthestVersion = freshVersions.reduce((a, b) =>
+        (STEP_ORDER[b.step_name] ?? 0) > (STEP_ORDER[a.step_name] ?? 0) ? b : a);
+      const resolvedPath = resolveDisplayPathFrom(freshVersions, furthestVersion.step_name);
+      if (resolvedPath) setFilePath(resolvedPath);
+      await versionHistory.refresh();
+
+      let order = STEP_ORDER[furthestVersion.step_name] ?? STEP_ORDER.upload;
+      let landingStage = STEP_KEY_TO_STAGE[furthestVersion.step_name] || 'upload';
+
+      // A real trained model for this exact resolved file (localStorage,
+      // scoped by filePath — TrainTest.jsx's own usePersisted) means the
+      // user actually got further than dataset_versions alone can show,
+      // since training never registers its own DatasetVersion — land on
+      // Training directly instead of stranding them one stage short.
+      if (resolvedPath && order >= STEP_ORDER.feature_selection) {
+        try {
+          const raw = localStorage.getItem(`prism_training_${resolvedPath}__history`);
+          if (JSON.parse(raw || '[]').length) { order = STEP_ORDER.training; landingStage = 'training'; }
+        } catch {}
+      }
+
+      setFurthestOrder(order);
+      setStage(landingStage);
+    } catch {
+      setFurthestOrder(STEP_ORDER.upload);
+      setStage('upload');
+    }
   };
 
   // Shared TopNav (frontend/src/components/TopNav.jsx) calls this with a
@@ -534,7 +602,20 @@ function App() {
         try {
           const formData = new FormData();
           formData.append('file', rawFile, rawFile.name);
-          await datasetsAPI.upload(projectId, formData);
+          const { data: uploadResult } = await datasetsAPI.upload(projectId, formData);
+          // Persist target_column/task_type onto the real Dataset row the
+          // moment they're known (Upload's wizard has already decided them
+          // by the time this fires — see the module comment above this
+          // handler) — best-effort, matching every other Django write in
+          // this app: opening a past project later needs this to rebuild
+          // uploadMeta, but a failed PATCH here must never block the
+          // upload itself from proceeding.
+          if (uploadResult?.dataset_id && (meta.targetColumn || meta.taskType)) {
+            datasetsAPI.updateMeta(uploadResult.dataset_id, {
+              target_column: meta.targetColumn || null,
+              task_type: meta.taskType || null,
+            }).catch(() => {});
+          }
           const { data: freshVersions } = await versionsAPI.list(projectId);
           const uploadVersion = freshVersions.find(v => v.step_name === 'upload');
           if (uploadVersion) setFilePath(uploadVersion.file_path);
@@ -565,6 +646,10 @@ function App() {
   function renderStage() {
   if (stage === 'landing') {
     return <LandingPage onAuthenticated={handleAuthenticated} />;
+  }
+
+  if (stage === 'workspace') {
+    return <WorkspacePage onProjectCreated={handleProjectCreated} onProjectOpened={handleProjectOpened} />;
   }
 
   if (stage === 'upload') {
@@ -848,7 +933,7 @@ function App() {
             Diagnose.jsx isn't built yet — enter a real on-disk CSV path below to continue into Cleaning.
           </div>
         )}
-        <LoadDatasetForm onLoad={(p) => { setFilePath(p); advance('cleaning'); }} bootstrapError={bootstrapError} />
+        <LoadDatasetForm onLoad={(p) => { setFilePath(p); advance('cleaning'); }} />
       </div>
     );
   }

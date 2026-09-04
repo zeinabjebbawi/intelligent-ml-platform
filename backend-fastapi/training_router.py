@@ -396,6 +396,7 @@ class TrainReq(BaseModel):
         "confusion_matrix": True,
         "per_class_stats": True,
         "model_summary": True,
+        "learning_curve": False,
     }
 
 # ─────────────────────────────────────────────────────────────────────────────

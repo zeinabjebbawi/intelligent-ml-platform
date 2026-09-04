@@ -192,3 +192,16 @@ class DatasetDetailView(APIView):
         dataset = get_object_or_404(Dataset, pk=dataset_id, project__user=request.user)
         serializer = DatasetSerializer(dataset)
         return Response(serializer.data)
+
+    def patch(self, request, dataset_id):
+        # Only ever called once, right after the Upload wizard's Step 2/3
+        # actually determines target_column/task_type (they're unknown at
+        # upload time — see DatasetUploadView's own profiling call above).
+        # partial=True since a caller only ever sends these two fields, not
+        # the full dataset payload.
+        dataset = get_object_or_404(Dataset, pk=dataset_id, project__user=request.user)
+        serializer = DatasetSerializer(dataset, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

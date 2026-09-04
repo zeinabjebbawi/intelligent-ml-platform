@@ -38,6 +38,60 @@ djangoAPI.interceptors.request.use((config) => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auto-refresh on a 401 — the access token is a real 24h-lived JWT
+// (backend-django/core/settings.py's SIMPLE_JWT), but until this existed,
+// nothing in the app ever called the refresh endpoint at all: `refresh_token`
+// was stored on login and then never read again anywhere. Any session left
+// open across that 24h window (this project's own dev sessions routinely
+// span multiple days) hit 401s on every subsequent Django call, including
+// ones made server-side by Auto Mode's FastAPI backend using whatever token
+// the browser last handed it (see auto_mode/runner.py's resume_run, which
+// now re-reads this same refreshed token on every checkpoint decision) —
+// confirmed live: exactly this, surfacing as
+// `cascade_delete(encoding) failed: Client error '401 Unauthorized'`
+// mid-run. One shared in-flight promise so N requests that all 401 around
+// the same moment trigger exactly one refresh call, not N of them racing
+// (ROTATE_REFRESH_TOKENS is on — a second refresh call made with a
+// refresh_token that a concurrent first call already rotated away would
+// itself fail).
+let refreshPromise = null
+function refreshAccessToken() {
+  if (!refreshPromise) {
+    const refresh = localStorage.getItem('refresh_token')
+    refreshPromise = (refresh
+      ? djangoAPI.post('/api/auth/token/refresh/', { refresh })
+      : Promise.reject(new Error('no refresh_token stored')))
+      .then(({ data }) => {
+        localStorage.setItem('access_token', data.access)
+        if (data.refresh) localStorage.setItem('refresh_token', data.refresh)
+        return data.access
+      })
+      .finally(() => { refreshPromise = null })
+  }
+  return refreshPromise
+}
+
+djangoAPI.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const original = error.config
+    const isAuthEndpoint = original?.url?.includes('/api/auth/')
+    if (error.response?.status === 401 && !original?._retriedAfterRefresh && !isAuthEndpoint) {
+      original._retriedAfterRefresh = true
+      try {
+        const freshToken = await refreshAccessToken()
+        original.headers.Authorization = `Bearer ${freshToken}`
+        return djangoAPI(original)
+      } catch {
+        // Refresh token itself is gone/expired — nothing left to do client-side
+        // but let the original 401 surface, same as before this interceptor existed.
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pre-built function calls for each operation
 // Import these in your React components instead of writing axios calls inline
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +121,11 @@ export const datasetsAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
   get: (datasetId) => djangoAPI.get(`/api/datasets/${datasetId}/`),
+  // target_column/task_type are unknown at upload time (see
+  // DatasetUploadView) — set once the Upload wizard's Step 2/3 actually
+  // determines them, so a later "open this project" can rebuild uploadMeta
+  // without them, everything past Encoding would silently lose its target.
+  updateMeta: (datasetId, data) => djangoAPI.patch(`/api/datasets/${datasetId}/`, data),
 }
 
 // ── Dataset Version History (Django) ───────────────────────────────────────────

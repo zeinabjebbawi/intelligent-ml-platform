@@ -1,27 +1,69 @@
-import { useState } from 'react'
-import { useTheme } from '../theme'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { authAPI } from '../api'
 import { formatDjangoErrors } from '../utils/authErrors'
+import { GATE as COLORS, GATE_SPECTRUM as SPECTRUM } from '../constants/darkGate'
 
 const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuthSection — the real Login/Register card that ends the landing scroll.
-// Lives in normal (non-pinned) document flow, so it needs none of the
-// scroll-progress/canvas machinery above it — just the app's usual theme
-// tokens and the existing authAPI.
+// AuthSection — the "gate" the scroll hero releases into. Styling is ported
+// from prism_prototype_v2.html's .gate/.tabs/.field/.continue rules — a
+// fixed dark palette independent of the app's own light/dark theme toggle,
+// the same deliberate one-off deviation Report.jsx's gradient header already
+// makes for a page that isn't part of the ordinary page furniture.
+//
+// Two adaptations from the source mockup, both required for this to
+// actually work against the real backend (register requires a password,
+// min 8 characters) rather than just look right:
+//   - the mockup's Create Account form had no password field at all — one
+//     (plus a client-only confirm field) is added here, styled identically.
+//   - the mockup's single "Name" input is sent as `first_name`; `last_name`
+//     is left blank. Splitting on whitespace would be guessable but wrong
+//     often enough (multi-word first names, etc.) that leaving it as one
+//     field is the more honest choice until real separate fields are wanted.
 // ─────────────────────────────────────────────────────────────────────────────
+function Field({ label, id, ...inputProps }) {
+  return (
+    <div>
+      <label htmlFor={id} style={{ display: 'block', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase', color: COLORS.muted, marginBottom: 10 }}>
+        {label}
+      </label>
+      <input id={id} {...inputProps}
+        style={{
+          width: '100%', background: 'transparent', border: 'none',
+          borderBottom: '1px solid rgba(255,255,255,0.2)', color: COLORS.white,
+          fontSize: 18, fontFamily: 'inherit', padding: '6px 2px 12px', outline: 'none',
+        }}
+        onFocus={(e) => { e.target.style.borderBottomColor = COLORS.white }}
+        onBlur={(e) => { e.target.style.borderBottomColor = 'rgba(255,255,255,0.2)' }}
+      />
+    </div>
+  )
+}
+
 export default function AuthSection({ onAuthenticated }) {
-  const { C } = useTheme()
-  const [mode, setMode] = useState('register') // 'login' | 'register'
+  const [mode, setMode] = useState('login') // 'login' | 'register'
+  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  const tabInRef = useRef(null)
+  const tabUpRef = useRef(null)
+  const tabsRowRef = useRef(null)
+  const [underlineX, setUnderlineX] = useState(0)
+
+  useLayoutEffect(() => {
+    const target = mode === 'login' ? tabInRef.current : tabUpRef.current
+    const tabsRow = tabsRowRef.current
+    if (!target || !tabsRow) return
+    const tabsRect = tabsRow.getBoundingClientRect()
+    const rect = target.getBoundingClientRect()
+    setUnderlineX(rect.left - tabsRect.left - (60 - rect.width) / 2)
+  }, [mode])
 
   const switchMode = (next) => {
     setMode(next); setError(''); setNotice(''); setPassword(''); setConfirmPassword('')
@@ -51,19 +93,12 @@ export default function AuthSection({ onAuthenticated }) {
     setSubmitting(true); setError(''); setNotice('')
     try {
       if (mode === 'register') {
-        await authAPI.register({
-          email: email.trim(), password,
-          first_name: firstName.trim(), last_name: lastName.trim(),
-        })
+        await authAPI.register({ email: email.trim(), password, first_name: name.trim() })
         try {
           await doLogin()
           onAuthenticated?.()
         } catch {
-          // Account was created but the immediate auto-login failed (rare —
-          // a backend hiccup). Don't loop back into registration against
-          // the now-duplicate email; send the user to Login instead.
-          setMode('login')
-          setPassword('')
+          switchMode('login')
           setNotice('Account created — please log in below.')
         }
       } else {
@@ -77,89 +112,73 @@ export default function AuthSection({ onAuthenticated }) {
     }
   }
 
-  const inputStyle = {
-    width: '100%', padding: '10px 14px', fontSize: 13, border: `1px solid ${C.border}`,
-    borderRadius: 10, marginBottom: 12, boxSizing: 'border-box', background: C.card, color: C.text,
-  }
-  const labelStyle = { fontSize: 11.5, fontWeight: 700, color: C.muted, marginBottom: 4, display: 'block' }
-
   return (
-    <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: C.bg, padding: '60px 24px',
+    <section style={{
+      position: 'relative', zIndex: 10, background: COLORS.bg, minHeight: '100vh',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 24px',
+      fontFamily: "'Helvetica Neue', Arial, sans-serif",
     }}>
-      <form onSubmit={handleSubmit} style={{
-        background: C.card, border: `1px solid ${C.border}`, borderRadius: 16,
-        padding: '32px 36px', boxShadow: '0 4px 24px rgba(0,0,0,0.12)', width: 420,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <span style={{ fontSize: 18, color: C.primary }}>◈</span>
-          <span style={{ fontWeight: 900, fontSize: 16, color: C.text, letterSpacing: 0.5 }}>PRISM</span>
+      <div style={{ width: '100%', maxWidth: 420 }}>
+        <div style={{ fontSize: 11, letterSpacing: '0.3em', textTransform: 'uppercase', color: COLORS.muted, marginBottom: 14, textAlign: 'center' }}>
+          Prism
         </div>
-        <h1 style={{ fontSize: 20, fontWeight: 800, marginBottom: 20, color: C.text }}>
-          {mode === 'register' ? 'Create your account' : 'Welcome back'}
+        <h1 style={{ fontSize: 26, fontWeight: 300, textAlign: 'center', margin: '0 0 48px', lineHeight: 1.4, color: COLORS.white }}>
+          Continue into<br />your workspace
         </h1>
 
-        <div style={{ display: 'flex', gap: 4, background: C.faint, borderRadius: 10, padding: 4, marginBottom: 20 }}>
-          {[{ key: 'register', label: 'Create Account' }, { key: 'login', label: 'Log In' }].map(t => (
-            <button key={t.key} type="button" onClick={() => switchMode(t.key)}
-              style={{
-                flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer',
-                background: mode === t.key ? C.card : 'transparent',
-                color: mode === t.key ? C.primary : C.muted,
-                fontWeight: mode === t.key ? 700 : 500, fontSize: 12.5,
-                boxShadow: mode === t.key ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
-              }}>
-              {t.label}
-            </button>
-          ))}
+        <div ref={tabsRowRef} style={{ display: 'flex', justifyContent: 'center', gap: 32, position: 'relative', marginBottom: 6 }}>
+          <button ref={tabInRef} type="button" onClick={() => switchMode('login')}
+            style={{ background: 'none', border: 'none', color: mode === 'login' ? COLORS.white : COLORS.muted, fontSize: 15, letterSpacing: '0.03em', cursor: 'pointer', padding: '0 0 14px', fontFamily: 'inherit' }}>
+            Sign in
+          </button>
+          <button ref={tabUpRef} type="button" onClick={() => switchMode('register')}
+            style={{ background: 'none', border: 'none', color: mode === 'register' ? COLORS.white : COLORS.muted, fontSize: 15, letterSpacing: '0.03em', cursor: 'pointer', padding: '0 0 14px', fontFamily: 'inherit' }}>
+            Create account
+          </button>
         </div>
+        <div style={{
+          height: 2, width: 60, background: SPECTRUM, margin: '0 auto 44px', borderRadius: 2,
+          transform: `translateX(${underlineX}px)`, transition: 'transform 0.35s ease',
+        }} />
 
         {notice && (
-          <div style={{ background: C.successSoft, border: `1px solid ${C.success}`, borderRadius: 10,
-            padding: '10px 14px', color: C.success, fontSize: 12.5, marginBottom: 16 }}>{notice}</div>
+          <div style={{ background: COLORS.successBg, border: `1px solid ${COLORS.success}55`, borderRadius: 8, padding: '10px 14px', color: COLORS.success, fontSize: 12.5, marginBottom: 24 }}>{notice}</div>
         )}
         {error && (
-          <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 10,
-            padding: '10px 14px', color: C.danger, fontSize: 12.5, marginBottom: 16 }}>⚠ {error}</div>
+          <div style={{ background: COLORS.dangerBg, border: `1px solid ${COLORS.danger}55`, borderRadius: 8, padding: '10px 14px', color: COLORS.danger, fontSize: 12.5, marginBottom: 24 }}>⚠ {error}</div>
         )}
 
-        {mode === 'register' && (
-          <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>First name</label>
-              <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} style={inputStyle} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Last name</label>
-              <input type="text" value={lastName} onChange={e => setLastName(e.target.value)} style={inputStyle} />
-            </div>
-          </div>
-        )}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 30 }}>
+          {mode === 'register' && (
+            <Field id="auth-name" label="Name" type="text" placeholder="Your full name" value={name} onChange={(e) => setName(e.target.value)} />
+          )}
+          <Field id="auth-email" label="Email" type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+          <Field id="auth-password" label="Password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === 'register' ? 'new-password' : 'current-password'} />
+          {mode === 'register' && (
+            <Field id="auth-confirm-password" label="Confirm password" type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          )}
 
-        <label style={labelStyle}>Email</label>
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} autoComplete="email" />
+          <button type="submit" disabled={submitting}
+            style={{
+              marginTop: 12, background: 'none', border: 'none', color: COLORS.white, fontSize: 15,
+              letterSpacing: '0.04em', cursor: submitting ? 'default' : 'pointer', opacity: submitting ? 0.6 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', fontFamily: 'inherit',
+            }}
+            onMouseEnter={(e) => { const s = e.currentTarget.querySelector('span'); if (s) s.style.transform = 'translateX(6px)' }}
+            onMouseLeave={(e) => { const s = e.currentTarget.querySelector('span'); if (s) s.style.transform = 'translateX(0)' }}>
+            {submitting ? 'Working…' : (mode === 'register' ? 'Create account' : 'Continue')}
+            <span style={{ transition: 'transform 0.25s ease' }}>→</span>
+          </button>
+        </form>
 
-        <label style={labelStyle}>Password</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={inputStyle}
-          autoComplete={mode === 'register' ? 'new-password' : 'current-password'} />
-
-        {mode === 'register' && (
-          <>
-            <label style={labelStyle}>Confirm password</label>
-            <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} style={inputStyle} />
-          </>
-        )}
-
-        <button type="submit" disabled={submitting}
-          style={{
-            width: '100%', marginTop: 8, padding: '11px 0', borderRadius: 10, border: 'none',
-            background: submitting ? C.muted : C.primary, color: 'white', fontWeight: 700, fontSize: 14,
-            cursor: submitting ? 'default' : 'pointer',
-          }}>
-          {submitting ? 'Working…' : (mode === 'register' ? 'Create Account' : 'Log In')}
-        </button>
-      </form>
-    </div>
+        <p style={{ textAlign: 'center', fontSize: 12, color: COLORS.muted, marginTop: 40, lineHeight: 1.6 }}>
+          Prefer to look around first?{' '}
+          <a href="#" onClick={(e) => e.preventDefault()} style={{ color: COLORS.white, textDecoration: 'none', borderBottom: '1px solid rgba(255,255,255,0.3)' }}>
+            Explore a sample dataset
+          </a>
+        </p>
+      </div>
+    </section>
   )
 }

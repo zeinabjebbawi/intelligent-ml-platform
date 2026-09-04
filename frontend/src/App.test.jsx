@@ -8,22 +8,25 @@ afterEach(() => {
 });
 
 // A returning user with a valid token skips Landing entirely and lands on
-// Upload directly — see the lazy `stage` initializer in App.jsx.
-test('renders the Upload page for an already-authenticated user, with the shared nav', () => {
+// Workspace directly — see the lazy `stage` initializer in App.jsx. Django
+// isn't running in this test, so Workspace's own project-list fetch fails
+// and surfaces its own inline error — that's fine, it doesn't block the
+// page itself from rendering.
+test('renders the Workspace page for an already-authenticated user', async () => {
   localStorage.setItem('access_token', 'fake-test-token');
   render(<ThemeProvider><App /></ThemeProvider>);
-  expect(screen.getByText(/Data Ingestion/i)).toBeInTheDocument();
+  expect(await screen.findByText(/New Project/)).toBeInTheDocument();
   expect(screen.getAllByText('PRISM').length).toBeGreaterThan(0);
 });
 
 // A first-time visitor with no token sees the Landing/auth gate instead —
-// the canvas-based scroll hero (ScrollVisual/StoryOverlay) is inert under
-// jsdom (no real canvas backend, IntersectionObserver stubbed as a no-op),
-// so this only checks that AuthSection itself renders correctly.
-test('renders the Landing page with Login/Register when no token exists', () => {
+// the WebGL crystal scene (CrystalScene) is inert under jsdom (no real
+// canvas/WebGL backend, IntersectionObserver stubbed as a no-op so its
+// scroll-progress loop never even starts), so this only checks that
+// AuthSection itself renders correctly.
+test('renders the Landing page with Sign in/Create account when no token exists', () => {
   localStorage.clear();
-  const { container } = render(<ThemeProvider><App /></ThemeProvider>);
-  expect(screen.getAllByText('Log In').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('Create Account').length).toBeGreaterThan(0);
-  expect(container.querySelector('canvas')).toBeInTheDocument();
+  render(<ThemeProvider><App /></ThemeProvider>);
+  expect(screen.getByText('Sign in')).toBeInTheDocument();
+  expect(screen.getByText('Create account')).toBeInTheDocument();
 });

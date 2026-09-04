@@ -109,7 +109,20 @@ def resume_run(run_id: str, jwt_token: str, action: str, payload: Optional[dict]
 
     def _resume_thread():
         try:
-            result = prism_graph.invoke(Command(resume=resume_value), config=_config(run_id))
+            # `update` refreshes state["jwt_token"] to whatever the browser
+            # most recently handed us (AutoModePanel.jsx re-reads
+            # localStorage on every decision) — without this, every node's
+            # dj.* calls (register_version, cascade_delete, log_decision, …)
+            # keep using the token captured once at start_run(), which a
+            # long-paused HITL checkpoint can easily outlive even at this
+            # token's real 24h lifetime. Confirmed live: an Edit+Approve
+            # made well after the run started failed with
+            # `cascade_delete(encoding) failed: 401 Unauthorized` for
+            # exactly this reason. `resume` alone only supplies interrupt()'s
+            # return value for THIS pause — it does not touch any other
+            # state field, so the two have to be passed together.
+            result = prism_graph.invoke(
+                Command(resume=resume_value, update={"jwt_token": jwt_token}), config=_config(run_id))
             _finalize_from_result(run_id, result, project_id, jwt_token)
         except AbortRun as e:
             dj.update_experiment(project_id, None, jwt_token, status="aborted")

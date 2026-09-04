@@ -20,4 +20,16 @@ class DatasetSerializer(serializers.ModelSerializer):
         model = Dataset
         fields = ['id', 'original_filename', 'row_count', 'column_count',
                   'health_score', 'columns_metadata', 'profiling_result',
-                  'status', 'upload_timestamp', 'versions']
+                  'status', 'upload_timestamp', 'versions',
+                  'target_column', 'task_type']
+
+
+class DatasetSummarySerializer(serializers.ModelSerializer):
+    """Lightweight subset embedded in ProjectSerializer's `latest_dataset` —
+    just enough for the Workspace "Open" flow to rebuild uploadMeta without
+    a second round trip, never the full versions/profiling_result payload
+    DatasetSerializer carries for the dataset's own detail page."""
+    class Meta:
+        model = Dataset
+        fields = ['id', 'original_filename', 'row_count', 'column_count',
+                  'target_column', 'task_type']

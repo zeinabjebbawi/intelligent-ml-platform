@@ -57,6 +57,21 @@ class Dataset(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='uploaded')
     upload_timestamp = models.DateTimeField(auto_now_add=True)
 
+    TASK_TYPE_CHOICES = [
+        ('classification', 'Classification'),
+        ('regression', 'Regression'),
+        ('clustering', 'Clustering'),
+    ]
+    # Both null until the user actually picks them in the Upload wizard's
+    # Step 2/3 (immediately after the file lands here, target_column is
+    # genuinely unknown yet — see DatasetUploadView's own profiling call,
+    # which passes target_column=None for the same reason). Persisted here
+    # (not just kept in React's uploadMeta state) so "open a past project"
+    # has real data to resume from instead of every page past Encoding
+    # silently losing its target column the moment the browser tab closes.
+    target_column = models.CharField(max_length=200, null=True, blank=True)
+    task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES, null=True, blank=True)
+
     class Meta:
         ordering = ['-upload_timestamp']
 

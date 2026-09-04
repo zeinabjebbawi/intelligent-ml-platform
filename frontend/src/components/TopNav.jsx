@@ -1,5 +1,6 @@
 import { useTheme } from '../theme'
 import { STEP_ORDER } from '../hooks/useVersionHistory'
+import logout from '../utils/logout'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED TOP NAVIGATION — same structure/styling Diagnose.jsx originated
@@ -103,7 +104,9 @@ export default function TopNav({ active, onNavigate, furthestOrder = Infinity, t
           🔔
           <span style={{ position: 'absolute', top: -2, right: -2, width: 6, height: 6, borderRadius: '50%', background: C.danger }} />
         </span>
-        <span style={{ fontSize: 15, color: C.muted, cursor: 'default' }}>👤</span>
+        <button onClick={logout} title="Log out" style={{
+          background: 'none', border: 'none', fontSize: 15, color: C.muted, cursor: 'pointer', padding: 0, lineHeight: 1,
+        }}>👤</button>
       </div>
     </div>
   )

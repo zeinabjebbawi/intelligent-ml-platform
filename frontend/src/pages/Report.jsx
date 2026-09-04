@@ -3,24 +3,18 @@
  * Page name: "Report"
  *
  * Sections:
- *   1. Journey Timeline — visual horizontal timeline of every stage
- *   2. Key Findings     — auto-generated summary cards
- *   3. Export Options   — PDF, Notebook, Model download
+ *   1. Key Findings   — auto-generated summary cards
+ *   2. Export Options — PDF, Notebook, Model download
  *
  * Design: shares the app-wide theme system (../theme.jsx) for the shared
- * TopNav/VersionsBar and every ordinary control, but — deliberately, this
- * is the one page in the pipeline that gets its own distinct gradient
- * header (indigo → purple) rather than the plain page header every other
- * page uses. This is the final deliverable page; marking it visually
- * distinct from the 14 working pages before it is intentional, not a
- * theme-discipline lapse (a pasted first draft's hardcoded indigo/purple
- * hex values were kept for exactly this one deliberate accent — everything
- * else on the page still reads off `C`).
+ * TopNav/VersionsBar and every control, including the header — reads off
+ * `C` like every other page in the pipeline (a prior draft gave this page
+ * its own hardcoded indigo/purple gradient header instead; removed for
+ * visual consistency with the rest of the app).
  */
 import { useState, useEffect, useRef } from 'react'
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
-import { STEP_ORDER } from '../hooks/useVersionHistory'
 
 const shadow2 = '0 2px 8px rgba(0,0,0,0.05)'
 const shadow  = '0 4px 24px rgba(0,0,0,0.07)'
@@ -36,114 +30,6 @@ const callReport = async (endpoint, body) => {
   })
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Error ${res.status}`) }
   return res.json()
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STAGE DEFINITIONS — order and keys must match the real STEP_ORDER
-// (frontend/src/hooks/useVersionHistory.js), not a hand-copied guess. A
-// pasted first draft had `feature_engineering` BEFORE `encoding` here,
-// which is backwards from the real pipeline (encoding: 6, feature_
-// engineering: 7) — fixed by deriving `order` straight from STEP_ORDER
-// instead of hardcoding a second, driftable copy of the sequence.
-// ─────────────────────────────────────────────────────────────────────────────
-const ALL_STAGES = [
-  { key: 'upload',              label: 'Upload',              icon: '📤' },
-  { key: 'diagnose',            label: 'Diagnose',            icon: '🔍' },
-  { key: 'cleaning_duplicates', label: 'Duplicates',          icon: '🧹' },
-  { key: 'cleaning_outliers',   label: 'Outliers',            icon: '⚡' },
-  { key: 'cleaning_missing',    label: 'Missing Values',      icon: '🧩' },
-  { key: 'encoding',            label: 'Encode & Scale',      icon: '🔢' },
-  { key: 'feature_engineering', label: 'Feature Eng.',        icon: '✦' },
-  { key: 'sampling',            label: 'Sampling',            icon: '⚖' },
-  { key: 'data_readiness',      label: 'Visualization',       icon: '📊' },
-  { key: 'feature_selection',   label: 'Feature Select.',     icon: '✓' },
-  { key: 'training',            label: 'Train & Test',        icon: '🤖' },
-  { key: 'feature_impact',      label: 'Feature Importance',  icon: '💡' },
-  { key: 'learning_curve',      label: 'Learning Curve',      icon: '📉' },
-  { key: 'simulator',           label: 'Simulator',           icon: '🎮' },
-  { key: 'report',              label: 'Report',              icon: '📄' },
-].map(s => ({ ...s, order: STEP_ORDER[s.key] }))
-
-const STAGE_COLORS = ['#6366f1', '#8b5cf6', '#f59e0b', '#f59e0b', '#f59e0b', '#06b6d4', '#06b6d4',
-  '#10b981', '#10b981', '#6366f1', '#6366f1', '#f59e0b', '#06b6d4', '#8b5cf6', '#10b981']
-
-// ─────────────────────────────────────────────────────────────────────────────
-// JOURNEY TIMELINE
-// ─────────────────────────────────────────────────────────────────────────────
-const JourneyTimeline = ({ furthestOrder, stepsInfo }) => {
-  const { C } = useTheme()
-  const [expandedKey, setExpanded] = useState(null)
-  const scrollRef = useRef()
-
-  // Real completion state, not a placeholder — a pasted first draft's
-  // `isCompleted = (key) => completedSteps?.includes(key) || true` always
-  // evaluated to `true` no matter what `completedSteps` held (the `|| true`
-  // made the check itself meaningless), so the timeline claimed every
-  // stage was done even for a project that had barely started. This uses
-  // the SAME `furthestOrder` mechanism App.jsx already tracks for every
-  // other page's nav-gating — a stage is "done" once the user has actually
-  // advanced past it.
-  const isCompleted = (order) => order <= furthestOrder
-
-  return (
-    <div>
-      <div ref={scrollRef} style={{ overflowX: 'auto', paddingBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0,
-          minWidth: `${ALL_STAGES.length * 90}px`, paddingTop: 24, paddingBottom: 8 }}>
-          {ALL_STAGES.map((stage, idx) => {
-            const color = STAGE_COLORS[idx]
-            const done = isCompleted(stage.order)
-            const info = stepsInfo?.[stage.key]
-            const isOpen = expandedKey === stage.key
-
-            return (
-              <div key={stage.key} style={{ display: 'flex', flexDirection: 'column',
-                alignItems: 'center', flex: 1, position: 'relative', minWidth: 84 }}>
-                {idx > 0 && (
-                  <div style={{ position: 'absolute', top: 19, right: '50%', left: 0, height: 3,
-                    background: done ? color : C.border, transition: 'background 0.3s' }} />
-                )}
-                {idx < ALL_STAGES.length - 1 && (
-                  <div style={{ position: 'absolute', top: 19, left: '50%', right: 0, height: 3,
-                    background: isCompleted(ALL_STAGES[idx + 1].order) ? STAGE_COLORS[idx + 1] : C.border,
-                    transition: 'background 0.3s' }} />
-                )}
-                <div onClick={() => setExpanded(isOpen ? null : stage.key)}
-                  style={{ width: 40, height: 40, borderRadius: '50%', zIndex: 2,
-                    background: done ? color : C.faint,
-                    border: `3px solid ${done ? color : C.border}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 16, cursor: 'pointer', position: 'relative',
-                    boxShadow: done ? `0 0 0 4px ${color}22` : 'none', transition: 'all 0.2s' }}>
-                  {done ? stage.icon : '○'}
-                </div>
-                <div style={{ marginTop: 8, fontSize: 9, fontWeight: 600,
-                  color: done ? C.text : C.muted, textAlign: 'center', lineHeight: 1.3, maxWidth: 78 }}>
-                  {stage.label}
-                </div>
-                {isOpen && info && (
-                  <div style={{ position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
-                    zIndex: 100, background: C.card, border: `1.5px solid ${color}`, borderRadius: 10,
-                    padding: '10px 14px', width: 200, boxShadow: shadow, fontSize: 11, color: C.text, lineHeight: 1.5 }}>
-                    <div style={{ fontWeight: 700, color, marginBottom: 4 }}>{stage.icon} {stage.label}</div>
-                    {info.decision && <div style={{ color: C.text }}>{info.decision}</div>}
-                    {info.version && <div style={{ color: C.muted, marginTop: 3 }}>Version: {info.version}</div>}
-                    {info.metric && <div style={{ color: C.success, fontWeight: 600, marginTop: 3 }}>{info.metric}</div>}
-                    <button onClick={e => { e.stopPropagation(); setExpanded(null) }}
-                      style={{ position: 'absolute', top: 4, right: 6, background: 'none', border: 'none',
-                        cursor: 'pointer', color: C.muted, fontSize: 12 }}>✕</button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-      <div style={{ fontSize: 11, color: C.muted, textAlign: 'center', marginTop: 4 }}>
-        Click any stage node to see the decision made at that step. Scroll horizontally to see the full pipeline.
-      </div>
-    </div>
-  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,19 +212,6 @@ export default function ReportPage({
   const modelName = projectData?.lastModelName || null
   const hasScoreMetric = metrics.accuracy != null || metrics.r2 != null || metrics.n_clusters != null
 
-  const defaultStepsInfo = {
-    upload:              { decision: `Dataset uploaded: ${reportData?.summary_stats?.original_rows?.toLocaleString() || '—'} rows`, version: 'Original' },
-    cleaning_duplicates: { decision: `${projectData?.cleaningStats?.duplicates_removed || 0} duplicate rows removed` },
-    cleaning_outliers:   { decision: `${projectData?.cleaningStats?.outliers_removed || 0} outlier rows removed via IQR` },
-    cleaning_missing:    { decision: 'Missing values imputed using mean/mode' },
-    encoding:            { decision: 'Categorical columns encoded; numeric columns scaled' },
-    feature_selection:   { decision: `${projectData?.selectedFeatures?.length || '—'} features selected` },
-    training:            { decision: `${modelName || 'Model'} trained`, metric: metrics.accuracy != null ? `Accuracy: ${(metrics.accuracy * 100).toFixed(1)}%` : (metrics.r2 != null ? `R²: ${metrics.r2.toFixed(3)}` : '') },
-    feature_impact:      { decision: 'SHAP global + waterfall analysis completed' },
-    learning_curve:      { decision: projectData?.lcPattern ? `Pattern: ${projectData.lcPattern}` : 'Learning curve analyzed' },
-    report:               { decision: 'Final report generated', version: 'Complete' },
-  }
-
   if (loading) return (
     <div style={{ background: C.bg, minHeight: '100vh' }}>
       <TopNav active={active || 'report'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
@@ -365,31 +238,29 @@ export default function ReportPage({
         <TopNav active={active || 'report'} onNavigate={onNavigate} furthestOrder={furthestOrder} taskType={projectData?.taskType} />
       </div>
 
-      {/* Deliberately the one distinct-colored header on the platform —
-          see file header comment. */}
-      <div style={{ background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)', padding: '32px 40px', color: 'white' }}>
+      <div style={{ padding: '32px 40px', borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 2, opacity: 0.75, marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 2, color: C.muted, marginBottom: 8 }}>
               PRISM ML Platform — Final Report
             </div>
-            <h1 style={{ fontSize: 32, fontWeight: 900, margin: 0, marginBottom: 6 }}>
+            <h1 style={{ fontSize: 32, fontWeight: 900, margin: 0, marginBottom: 6, color: C.text }}>
               {reportData?.project_title || 'Project Report'}
             </h1>
-            <div style={{ fontSize: 13, opacity: 0.85 }}>
+            <div style={{ fontSize: 13, color: C.muted }}>
               Generated {reportData?.generated_at ? new Date(reportData.generated_at).toLocaleString() : new Date().toLocaleString()}
             </div>
           </div>
           <button onClick={handlePrint} className="no-print"
-            style={{ padding: '10px 20px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.35)',
-              background: 'rgba(255,255,255,0.15)', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+            style={{ padding: '10px 20px', borderRadius: 10, border: `1px solid ${C.border}`,
+              background: C.card, color: C.primary, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
             🖨 Print / PDF
           </button>
         </div>
 
         {modelName && (
           <div style={{ display: 'flex', gap: 24, marginTop: 20, padding: '14px 20px',
-            background: 'rgba(255,255,255,0.14)', borderRadius: 12, flexWrap: 'wrap' }}>
+            background: C.light, borderRadius: 12, flexWrap: 'wrap' }}>
             {[
               { label: 'Model', value: modelName },
               { label: taskType === 'regression' ? 'R²' : taskType === 'clustering' ? 'Clusters' : 'Accuracy',
@@ -400,8 +271,8 @@ export default function ReportPage({
               { label: 'Features', value: projectData?.selectedFeatures?.length || '—' },
             ].filter(m => !m.hide).map(m => (
               <div key={m.label}>
-                <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.5, opacity: 0.65, marginBottom: 2 }}>{m.label}</div>
-                <div style={{ fontSize: 18, fontWeight: 900 }}>{m.value}</div>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.5, color: C.muted, marginBottom: 2 }}>{m.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>{m.value}</div>
               </div>
             ))}
           </div>
@@ -414,17 +285,6 @@ export default function ReportPage({
           <div className="no-print" style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 12,
             padding: '14px 18px', color: C.danger, marginBottom: 20, fontSize: 13 }}>⚠ {error}</div>
         )}
-
-        {/* ── SECTION 1: Journey Timeline ── */}
-        <div style={{ marginBottom: 32 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, color: C.text, margin: 0 }}>Project Journey</h2>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>— every stage of the ML pipeline</span>
-          </div>
-          <div style={{ background: C.card, borderRadius: 16, padding: '24px 28px', boxShadow: shadow2, border: `1px solid ${C.border}` }}>
-            <JourneyTimeline furthestOrder={furthestOrder ?? Infinity} stepsInfo={stepsInfo || defaultStepsInfo} />
-          </div>
-        </div>
 
         {/* ── SECTION 2: Key Findings ── */}
         <div style={{ marginBottom: 32 }}>
