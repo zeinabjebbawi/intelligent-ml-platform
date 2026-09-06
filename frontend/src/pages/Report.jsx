@@ -35,15 +35,12 @@ const callReport = async (endpoint, body) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // KEY FINDINGS CARD
 // ─────────────────────────────────────────────────────────────────────────────
-const FindingCard = ({ icon, title, text, accent }) => {
+const FindingCard = ({ title, text, accent }) => {
   const { C } = useTheme()
   return (
     <div style={{ background: C.card, borderRadius: 12, padding: '16px 18px', boxShadow: shadow2,
       border: `1px solid ${C.border}`, borderLeft: `3px solid ${accent || C.primary}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 18 }}>{icon}</span>
-        <span style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{title}</span>
-      </div>
+      <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 8 }}>{title}</div>
       <p style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.7, margin: 0 }}>{text}</p>
     </div>
   )
@@ -57,10 +54,10 @@ const FindingCard = ({ icon, title, text, accent }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const METRIC_SETS = {
   classification: [
-    { key: 'accuracy',  label: 'Accuracy',  pct: true,  color: '#6366f1' },
-    { key: 'f1',        label: 'F1-Score',  pct: true,  color: '#10b981' },
-    { key: 'precision', label: 'Precision', pct: true,  color: '#f59e0b' },
-    { key: 'recall',    label: 'Recall',    pct: true,  color: '#8b5cf6' },
+    { key: 'accuracy',  label: 'Accuracy',  pct: true },
+    { key: 'f1',        label: 'F1-Score',  pct: true },
+    { key: 'precision', label: 'Precision', pct: true },
+    { key: 'recall',    label: 'Recall',    pct: true },
   ],
   regression: [
     { key: 'r2',   label: 'R²',   pct: false, color: '#6366f1' },
@@ -93,7 +90,7 @@ const MetricsStrip = ({ metrics, modelName, taskType }) => {
         <div key={e.key} style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase',
             letterSpacing: 1, marginBottom: 4 }}>{e.label}</div>
-          <div style={{ fontSize: 24, fontWeight: 900, color: e.color }}>
+          <div style={{ fontSize: 24, fontWeight: 900, color: e.color || C.text }}>
             {e.pct ? `${(e.value * 100).toFixed(1)}%` : Number(e.value).toFixed(e.key === 'n_clusters' ? 0 : 2)}
           </div>
         </div>
@@ -105,7 +102,7 @@ const MetricsStrip = ({ metrics, modelName, taskType }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
-const ExportBtn = ({ icon, label, sub, accent, onClick, loading, disabled }) => {
+const ExportBtn = ({ label, sub, accent, onClick, loading, disabled }) => {
   const { C } = useTheme()
   return (
     <button onClick={onClick} disabled={loading || disabled}
@@ -115,8 +112,7 @@ const ExportBtn = ({ icon, label, sub, accent, onClick, loading, disabled }) => 
         boxShadow: shadow2, opacity: (loading || disabled) ? 0.55 : 1 }}
       onMouseEnter={e => { if (!loading && !disabled) e.currentTarget.style.background = `${accent || C.primary}0d` }}
       onMouseLeave={e => { e.currentTarget.style.background = C.card }}>
-      <div style={{ fontSize: 24, marginBottom: 6 }}>{loading ? '⏳' : icon}</div>
-      <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 2 }}>{loading ? 'Exporting…' : label}</div>
       <div style={{ fontSize: 11, color: C.muted }}>{disabled ? 'No trained model to export yet' : sub}</div>
     </button>
   )
@@ -254,36 +250,16 @@ export default function ReportPage({
           <button onClick={handlePrint} className="no-print"
             style={{ padding: '10px 20px', borderRadius: 10, border: `1px solid ${C.border}`,
               background: C.card, color: C.primary, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-            🖨 Print / PDF
+            Print / PDF
           </button>
         </div>
-
-        {modelName && (
-          <div style={{ display: 'flex', gap: 24, marginTop: 20, padding: '14px 20px',
-            background: C.light, borderRadius: 12, flexWrap: 'wrap' }}>
-            {[
-              { label: 'Model', value: modelName },
-              { label: taskType === 'regression' ? 'R²' : taskType === 'clustering' ? 'Clusters' : 'Accuracy',
-                value: taskType === 'regression' ? (metrics.r2 != null ? metrics.r2.toFixed(3) : '—')
-                  : taskType === 'clustering' ? (metrics.n_clusters ?? '—')
-                  : (metrics.accuracy != null ? `${(metrics.accuracy * 100).toFixed(1)}%` : '—') },
-              { label: 'F1-Score', value: metrics.f1 != null ? `${(metrics.f1 * 100).toFixed(1)}%` : '—', hide: taskType !== 'classification' },
-              { label: 'Features', value: projectData?.selectedFeatures?.length || '—' },
-            ].filter(m => !m.hide).map(m => (
-              <div key={m.label}>
-                <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.5, color: C.muted, marginBottom: 2 }}>{m.label}</div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>{m.value}</div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       <div style={{ padding: '28px 40px 0' }}>
 
         {error && (
           <div className="no-print" style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 12,
-            padding: '14px 18px', color: C.danger, marginBottom: 20, fontSize: 13 }}>⚠ {error}</div>
+            padding: '14px 18px', color: C.danger, marginBottom: 20, fontSize: 13 }}>{error}</div>
         )}
 
         {/* ── SECTION 2: Key Findings ── */}
@@ -298,7 +274,7 @@ export default function ReportPage({
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
             {(reportData?.findings || []).map((f, i) => (
-              <FindingCard key={i} icon={f.icon} title={f.title} text={f.text}
+              <FindingCard key={i} title={f.title} text={f.text}
                 accent={[C.primary, '#8b5cf6', C.warning, C.success, '#06b6d4', '#f43f5e'][i % 6]} />
             ))}
             {!reportData?.findings?.length && (
@@ -313,11 +289,11 @@ export default function ReportPage({
         <div className="no-print" style={{ marginBottom: 32 }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 16 }}>Export Options</h2>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-            <ExportBtn icon="📄" label="Download Report as PDF" sub="Print-optimized version of this page"
+            <ExportBtn label="Download Report as PDF" sub="Print-optimized version of this page"
               accent={C.primary} onClick={handlePrint} />
-            <ExportBtn icon="📓" label="Export Jupyter Notebook" sub=".ipynb with full pipeline code + comments"
+            <ExportBtn label="Export Jupyter Notebook" sub=".ipynb with full pipeline code + comments"
               accent="#8b5cf6" onClick={handleExportNotebook} loading={nbLoading} />
-            <ExportBtn icon="🤖" label="Download Trained Model" sub=".pkl file — load in any Python environment"
+            <ExportBtn label="Download Trained Model" sub=".pkl file — load in any Python environment"
               accent={C.success} onClick={handleDownloadModel} disabled={!modelPath} />
           </div>
 
@@ -327,16 +303,13 @@ export default function ReportPage({
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
               {[
-                { icon: '📄', title: 'PDF Report', desc: 'Share with supervisors, clients, or as a capstone deliverable. All sections are print-formatted.' },
-                { icon: '📓', title: 'Jupyter Notebook', desc: 'Open in Jupyter Lab or VS Code. Run cells top-to-bottom to reproduce the full pipeline from scratch.' },
-                { icon: '🤖', title: 'Model File (.pkl)', desc: 'Load with pickle.load() in Python. Deploy for batch prediction in any Python environment.' },
+                { title: 'PDF Report', desc: 'Share with supervisors, clients, or as a capstone deliverable. All sections are print-formatted.' },
+                { title: 'Jupyter Notebook', desc: 'Open in Jupyter Lab or VS Code. Run cells top-to-bottom to reproduce the full pipeline from scratch.' },
+                { title: 'Model File (.pkl)', desc: 'Load with pickle.load() in Python. Deploy for batch prediction in any Python environment.' },
               ].map(e => (
-                <div key={e.title} style={{ display: 'flex', gap: 10 }}>
-                  <span style={{ fontSize: 18, flexShrink: 0 }}>{e.icon}</span>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 12, color: C.text }}>{e.title}</div>
-                    <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.desc}</div>
-                  </div>
+                <div key={e.title}>
+                  <div style={{ fontWeight: 700, fontSize: 12, color: C.text }}>{e.title}</div>
+                  <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.desc}</div>
                 </div>
               ))}
             </div>
@@ -347,7 +320,6 @@ export default function ReportPage({
         <div style={{ textAlign: 'center', padding: '32px 0',
           background: `linear-gradient(135deg, ${C.success}10, ${C.primary}10)`,
           borderRadius: 16, border: `1px solid ${C.border}`, marginBottom: 24 }}>
-          <div style={{ fontSize: 48, marginBottom: 10 }}>🎓</div>
           <div style={{ fontSize: 22, fontWeight: 900, color: C.text, marginBottom: 6 }}>Project Complete</div>
           <div style={{ fontSize: 14, color: C.muted, maxWidth: 500, margin: '0 auto', lineHeight: 1.7 }}>
             You have completed the full PRISM ML pipeline — from raw data upload to trained model

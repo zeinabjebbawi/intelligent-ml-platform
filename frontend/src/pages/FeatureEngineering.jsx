@@ -140,11 +140,10 @@ const CREATE_FEATURE_DESCRIPTION = {
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED SMALL COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
-function SectionTag({ icon, label, sub }) {
+function SectionTag({ label, sub }) {
   const { C } = useTheme()
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-      <span style={{ fontSize: 13 }}>{icon}</span>
       <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.2, textTransform: 'uppercase', color: C.primary }}>{label}</span>
       {sub && <span style={{ fontSize: 11, color: C.muted }}>{sub}</span>}
     </div>
@@ -186,7 +185,6 @@ function FEHeader({ activeTab, setActiveTab }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 20, color: C.primary }}>△</span>
             <span style={{ fontSize: 18, fontWeight: 900, color: C.text }}>Feature Engineering</span>
           </div>
           <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3, maxWidth: 520 }}>
@@ -512,11 +510,11 @@ function BucketizingContent({ filePath, profile, onApplied, doneBucketCols, setD
     <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginTop: 18 }}>
       {/* LEFT ~55%: strategy panel + stacking histograms */}
       <div style={{ flex: '1 1 55%', minWidth: 0 }}>
-        <SectionTag icon="📦" label="Bucketing Strategy" />
+        <SectionTag label="Bucketing Strategy" />
         <div style={{ background: 'white', border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 20px', boxShadow: shadow2 }}>
           {!bucketCol ? (
             <div style={{ textAlign: 'center', padding: '24px 0', color: C.muted, fontSize: 13 }}>
-              ☝ Click a numeric column in the table above to begin.
+              Click a numeric column in the table above to begin.
             </div>
           ) : (
             <>
@@ -597,7 +595,7 @@ function BucketizingContent({ filePath, profile, onApplied, doneBucketCols, setD
             {bucketResults.map((r, i) => (
               <div key={i} style={{ background: 'white', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', boxShadow: shadow2 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, marginBottom: 8 }}>
-                  📊 {r.newColName} — {STRATEGIES.find(s => s.value === r.strategy)?.label} · {r.histogram.length} buckets
+                  {r.newColName} — {STRATEGIES.find(s => s.value === r.strategy)?.label} · {r.histogram.length} buckets
                 </div>
                 <ResponsiveContainer width="100%" height={180}>
                   <BarChart data={r.histogram} margin={{ top: 4, right: 8, left: -12, bottom: 4 }}>
@@ -617,7 +615,7 @@ function BucketizingContent({ filePath, profile, onApplied, doneBucketCols, setD
 
       {/* RIGHT ~40%: modified column preview, compiling as more are applied */}
       <div style={{ flex: '1 1 40%', minWidth: 280 }}>
-        <SectionTag icon="⚡" label="Modified Column" />
+        <SectionTag label="Modified Column" />
         <div style={{ background: 'white', border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', boxShadow: shadow2 }}>
           {bucketResults.length === 0 && !preview ? (
             <div style={{ textAlign: 'center', padding: '28px 16px', color: C.muted, fontSize: 12.5 }}>
@@ -743,7 +741,7 @@ function CreateFeaturesContent({ filePath, colA, colB, setColA, setColB, onAppli
         {/* New Feature Panel — always visible, compact rather than a tall
             box with empty space when there's nothing to preview yet. */}
         <div style={{ flex: '0 0 260px', minWidth: 220 }}>
-          <SectionTag icon="✨" label="New Feature Preview" />
+          <SectionTag label="New Feature Preview" />
           <div style={{ background: 'white', border: `2px solid ${C.primary}`, borderRadius: 12, padding: 14 }}>
             {!bothSelected ? (
               <div style={{ textAlign: 'center', padding: '12px 0', color: C.muted, fontSize: 12.5 }}>
@@ -785,7 +783,7 @@ function CreateFeaturesContent({ filePath, colA, colB, setColA, setColB, onAppli
         <div style={{ flex: '1 1 380px', minWidth: 300, background: 'white', border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 20px', boxShadow: shadow2 }}>
         {!bothSelected ? (
           <div style={{ textAlign: 'center', padding: '8px 0', color: C.muted, fontSize: 13 }}>
-            ☝ Select two numeric columns in the table to begin combining them.
+            Select two numeric columns in the table to begin combining them.
           </div>
         ) : (
           <>
@@ -992,7 +990,7 @@ export default function FeatureEngineeringPage({ projectData, onNext, onUpdateDa
          profile && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <SectionTag icon="▤" label="Dataset Preview" sub={`${profile.row_count.toLocaleString()} rows · ${profile.col_count} columns`} />
+              <SectionTag label="Dataset Preview" sub={`${profile.row_count.toLocaleString()} rows · ${profile.col_count} columns`} />
               {done && (
                 <button onClick={() => setRedoModal(true)} style={btn(C.dangerSoft, C.danger, { fontSize: 11, padding: '6px 12px', border: `1px solid ${C.danger}` })}>↺ Redo Feature Engineering</button>
               )}
@@ -1023,7 +1021,7 @@ export default function FeatureEngineeringPage({ projectData, onNext, onUpdateDa
               />
             </div>
             <div style={{ marginTop: 14 }}>
-              <SectionTag icon="🔍" label="Column Analysis" sub="click a numeric column above" />
+              <SectionTag label="Column Analysis" sub="click a numeric column above" />
               <DiagnosticCard diagnostic={diagnostic} loading={diagLoading} />
             </div>
 

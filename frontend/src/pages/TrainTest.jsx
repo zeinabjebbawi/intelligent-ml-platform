@@ -30,6 +30,7 @@ import {
 import { useTheme } from '../theme'
 import TopNav from '../components/TopNav'
 import VersionsBar from '../components/VersionsBar'
+import { trainedModelsAPI } from '../api'
 
 const shadow  = '0 4px 24px rgba(0,0,0,0.07)'
 const shadow2 = '0 2px 8px rgba(0,0,0,0.05)'
@@ -1399,6 +1400,32 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
   // all (past results still need to stay reachable and restorable there
   // too via clicking a Model History entry, same as the other task types).
   const [activeResult, setActiveResult] = usePersisted(filePath, 'active_result', null)
+
+  // Hydrate modelHistory from Django's real TrainedModel table (see
+  // experiments/trained_model_views.py) — the durable record every register
+  // call below writes to. Without this, a project opened from a different
+  // browser/device (or one whose localStorage got cleared) would show an
+  // empty Model History even though the project genuinely has trained
+  // models, since prism_training_<filePath>__history was previously the
+  // ONLY place this list lived. Dedupes by model_id against whatever's
+  // already here (same pattern App.jsx's injectAutoModeTrainingResult
+  // already uses) so a normal same-browser revisit — where every server row
+  // is already known locally — adds nothing and reorders nothing.
+  useEffect(() => {
+    const projectId = projectData?.projectId
+    if (!projectId) return
+    trainedModelsAPI.list(projectId).then(({ data }) => {
+      setModelHistory(h => {
+        const known = new Set(h.map(m => m.model_id))
+        const restored = data
+          .filter(row => row.model_id && !known.has(row.model_id))
+          .map(row => ({ ...(row.result_data || {}), trained_model_id: row.id }))
+        return restored.length ? [...restored, ...h] : h
+      })
+    }).catch(() => { /* Django optional — local history still works */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectData?.projectId, filePath])
+
   // Mount-only (empty deps), NOT a plain "if clustering && truthy" check on
   // every render: handleTrain's own setActiveResult(result) after a real
   // training run also makes activeResult truthy, and a per-render guard
@@ -1674,6 +1701,33 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
         lastMetrics: metricsByTask[taskType] || {},
         trainRatio: splitRatio,
       })
+
+      // Register this run in Django's TrainedModel table (see
+      // experiments/trained_model_views.py) — the durable record that
+      // replaces localStorage as the source of truth for Model History.
+      // Best-effort: training itself already succeeded via FastAPI, so a
+      // Django write failure here must never surface as a training error.
+      const projectId = projectData?.projectId
+      if (projectId) {
+        const datasetVersion = (versions || []).find(v => v.filePath === filePath)?.id || null
+        trainedModelsAPI.register(projectId, {
+          dataset_version: datasetVersion,
+          model_id: result.model_id,
+          model_file: result.model_file,
+          algorithm: result.model_name,
+          display_name: result.display_name,
+          task_type: result.task_type,
+          target_column: targetColumn || '',
+          hyperparameters: params,
+          metrics: metricsByTask[taskType] || {},
+          confusion_matrix: result.confusion_matrix || {},
+          feature_importance: result.model_viz?.feature_importance || [],
+          result_data: result,
+        }).then(({ data: saved }) => {
+          setModelHistory(h => h.map(m => m.model_id === result.model_id ? { ...m, trained_model_id: saved.id } : m))
+          setActiveResult(r => (r?.model_id === result.model_id ? { ...r, trained_model_id: saved.id } : r))
+        }).catch(() => { /* Django optional — local history still works */ })
+      }
     } catch (e) { setTrainingError(e.message) }
     finally { setTrainingLoading(false) }
   }
@@ -2139,7 +2193,6 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
 
           {!selectedModel && !activeResult && (
             <div style={{ textAlign: 'center', padding: '120px 0', color: C.muted }}>
-              <div style={{ fontSize: 40, marginBottom: 14 }}>🤖</div>
               <div style={{ fontSize: 17, fontWeight: 800, color: C.text, marginBottom: 6 }}>Train and Test</div>
               <div style={{ fontSize: 13 }}>Select a model and configure settings on the left to begin.</div>
             </div>
@@ -2221,8 +2274,19 @@ export default function TrainTestPage({ projectData, onNext, onUpdateData,
           onDownload={() => downloadModel(modelHistory.find(m => m.model_id === historyMenuOpen))}
           onVisualizeTree={() => setTreePopupEntry(modelHistory.find(m => m.model_id === historyMenuOpen))}
           onDelete={() => {
+            const entry = modelHistory.find(m => m.model_id === historyMenuOpen)
             setModelHistory(h => h.filter(x => x.model_id !== historyMenuOpen))
             if (activeResult?.model_id === historyMenuOpen) setActiveResult(null)
+            // Soft-deletes the real Django row too (see TrainedModelDetailView)
+            // so this is a genuine removal from the project's model history,
+            // not just a local hide — the earlier gap being fixed here.
+            // entry.trained_model_id can be missing if this run was trained
+            // before this feature existed, or Django was unreachable at
+            // register time; local removal above still applies either way.
+            const projectId = projectData?.projectId
+            if (projectId && entry?.trained_model_id) {
+              trainedModelsAPI.remove(projectId, entry.trained_model_id).catch(() => {})
+            }
           }}
           onClose={() => setHistoryMenuOpen(null)} />
       )}

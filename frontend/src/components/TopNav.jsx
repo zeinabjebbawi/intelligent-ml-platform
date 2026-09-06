@@ -99,11 +99,6 @@ export default function TopNav({ active, onNavigate, furthestOrder = Infinity, t
           padding: '5px 12px', color: C.text, fontSize: 12, fontWeight: 700, cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6,
         }}>{dark ? '🌙' : '☀'} {dark ? 'Dark' : 'Light'}</button>
-        <span style={{ fontSize: 15, color: C.muted, cursor: 'default' }}>⚙</span>
-        <span style={{ fontSize: 15, color: C.muted, cursor: 'default', position: 'relative' }}>
-          🔔
-          <span style={{ position: 'absolute', top: -2, right: -2, width: 6, height: 6, borderRadius: '50%', background: C.danger }} />
-        </span>
         <button onClick={logout} title="Log out" style={{
           background: 'none', border: 'none', fontSize: 15, color: C.muted, cursor: 'pointer', padding: 0, lineHeight: 1,
         }}>👤</button>

@@ -45,7 +45,7 @@ const STEP_INFO = {
   },
   outliers: {
     title: 'Remove Outliers',
-    description: "Each numeric column is tested for normality (Shapiro–Wilk). Normal columns default to Z-Score; skewed columns default to IQR. Review the whole-dataset view, then drill into any column.",
+    description: "Each numeric column is tested for normality. Normal columns default to Z-Score; skewed columns default to IQR. Review the whole-dataset view, then drill into any column.",
   },
   missing: {
     title: 'Handle Missing Values',
@@ -584,11 +584,9 @@ function MethodSelector({ colData, method, setMethod, zThresh, setZThresh, iqrMu
               </button>
             )
           })}
-          {method === suggested && (
-            <span style={{ fontSize: 12, color: C.muted }}>
-              <span style={{ color: C.warning }}>✦</span> suggested for this column
-            </span>
-          )}
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.danger }}>
+            ⚠ You must use {suggested === 'zscore' ? 'Z-Score' : 'IQR'} for this column
+          </span>
         </div>
       </div>
 
@@ -752,9 +750,9 @@ function SectionHeader({ title, description }) {
 }
 
 const TABS = [
-  { id: 'duplicates', label: 'Duplicates', icon: '⬥' },
-  { id: 'outliers',   label: 'Outliers',   icon: '⚡' },
-  { id: 'missing',    label: 'Missing Values', icon: '○' },
+  { id: 'duplicates', label: 'Duplicates' },
+  { id: 'outliers',   label: 'Outliers' },
+  { id: 'missing',    label: 'Missing Values' },
 ]
 
 function PRISMHeader({ activeTab, setActiveTab }) {
@@ -783,7 +781,7 @@ function PRISMHeader({ activeTab, setActiveTab }) {
                   background: active ? C.white : 'transparent', color: active ? C.text : C.muted,
                   fontWeight: active ? 700 : 500, fontSize: 13, boxShadow: active ? shadow2 : 'none',
                   transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>{tab.icon}</span>{tab.label}
+                {tab.label}
               </button>
             )
           })}

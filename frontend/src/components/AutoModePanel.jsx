@@ -242,7 +242,7 @@ export default function AutoModePanel({ projectId, filePath, taskType, targetCol
         background: C.card, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
         color: C.text, fontSize: 13, fontWeight: 700,
       }}>
-        <span>🤖 Auto Mode</span>
+        <span>Auto Mode</span>
         <span style={{ fontSize: 11, fontWeight: 700, color: awaitingYou ? C.primary : C.muted }}>
           {awaitingYou ? '● Needs your input' : (STATUS_LABEL[status?.status] || 'Starting…')}
         </span>
@@ -271,7 +271,7 @@ export default function AutoModePanel({ projectId, filePath, taskType, targetCol
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           padding: '18px 22px', borderBottom: `1px solid ${C.border}`, flexShrink: 0,
         }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>🤖 Auto Mode</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Auto Mode</div>
           {/* Not terminal: collapses to the reopenable tab above — the run
               keeps going untouched, exactly like closing a sidebar rather
               than ending a session. Terminal: nothing left to preserve, so

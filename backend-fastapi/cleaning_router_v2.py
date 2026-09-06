@@ -211,11 +211,22 @@ def compute_outlier_masks(df: pd.DataFrame, num_cols: list):
     global (for the "Affected Rows" stat) and get-all-outlier-indices (for
     what "Remove All" actually removes) so those two numbers can never
     drift apart — they're the same computation, not two.
+
+    Binary columns (<=2 distinct non-null values — a 0/1 flag, a label
+    encoded as e.g. 1/2, etc.) are skipped entirely, not just zeroed out:
+    Z-score/IQR both assume a real continuous distribution, and with only
+    two possible values there's nothing shaped to be an "outlier" from —
+    the minority value would just get flagged as one purely for being rarer,
+    not for being extreme. Excluded from col_summary itself (not merely
+    reported as 0 outliers) so it also disappears from the frontend's
+    clickable column list instead of sitting there as a dead entry.
     """
     col_summary = []
     all_outlier_indices = set()
     for col in num_cols:
         s = df[col].dropna()
+        if s.nunique() <= 2:
+            continue
         if len(s) < 8:
             col_summary.append({"column": col, "n_outliers": 0,
                                  "method": "iqr", "is_normal": True, "p_value": 1.0})

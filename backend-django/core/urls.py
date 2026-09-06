@@ -47,6 +47,14 @@ urlpatterns = [
     # PATCH     /api/projects/<uuid:project_id>/automode/run/<uuid>/decisions/<uuid>/
     path('api/projects/<uuid:project_id>/automode/', include('experiments.urls')),
 
+    # Trained model history — durable record of every real training run
+    # (Manual Mode's own /training/train call, or Auto Mode's train node),
+    # replacing the browser's own localStorage as the sole source of truth:
+    # GET    /api/projects/<uuid:project_id>/trained-models/
+    # POST   /api/projects/<uuid:project_id>/trained-models/
+    # DELETE /api/projects/<uuid:project_id>/trained-models/<uuid:model_pk>/
+    path('api/projects/<uuid:project_id>/trained-models/', include('experiments.trained_model_urls')),
+
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 # The static() line serves uploaded files during development.
 # In production you would serve these through Nginx, not Django.

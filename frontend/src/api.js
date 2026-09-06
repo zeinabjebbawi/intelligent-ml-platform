@@ -145,6 +145,21 @@ export const versionsAPI = {
     `${djangoAPI.defaults.baseURL}/api/projects/${projectId}/versions/${versionId}/download/`,
 }
 
+// ── Trained Model History (Django) ─────────────────────────────────────────────
+// The durable, project-scoped record of every real training run — replaces the
+// browser's own localStorage (prism_training_<file_path>__history in
+// TrainTest.jsx) as the source of truth, so reopening a project from a
+// different browser/device still shows its trained models. See
+// backend-django/experiments/trained_model_views.py for the server-side logic.
+export const trainedModelsAPI = {
+  list: (projectId) =>
+    djangoAPI.get(`/api/projects/${projectId}/trained-models/`),
+  register: (projectId, data) =>
+    djangoAPI.post(`/api/projects/${projectId}/trained-models/`, data),
+  remove: (projectId, modelPk) =>
+    djangoAPI.delete(`/api/projects/${projectId}/trained-models/${modelPk}/`),
+}
+
 // ── Workflow / Step Memory (Django) ────────────────────────────────────────────
 // Persists which step the user is on, which steps are complete/need-redo, and
 // a per-step settings cache (thresholds, chosen methods, etc.) so navigating

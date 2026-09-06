@@ -46,7 +46,7 @@ const TABLE_BODY_MAX_HEIGHT = 420
 // decorative blob, icon pill) — the pattern explicitly preferred over plain
 // bordered KPI boxes.
 // ─────────────────────────────────────────────────────────────────────────────
-const MetricCard = ({ label, value, sub, accent, icon }) => {
+const MetricCard = ({ label, value, sub, accent }) => {
   const { C } = useTheme()
   const ac = accent || C.primary
   return (
@@ -58,12 +58,6 @@ const MetricCard = ({ label, value, sub, accent, icon }) => {
     }}>
       <div style={{ position: 'absolute', top: -28, right: -28, width: 80, height: 80,
         borderRadius: '50%', background: `${ac}12`, pointerEvents: 'none' }} />
-      {icon && (
-        <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 34, height: 34, borderRadius: 9, marginBottom: 8, background: `${ac}18`, fontSize: 15 }}>
-          {icon}
-        </div>
-      )}
       <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
         letterSpacing: 1.6, color: C.muted, marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 30, fontWeight: 900, color: C.text, lineHeight: 1 }}>{value}</div>
@@ -1126,7 +1120,6 @@ export default function FeatureSelectionPage({
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px',
           background: C.faint, border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 20,
           fontSize: 13, color: C.text }}>
-          <span style={{ fontSize: 15 }}>📊</span>
           <span><strong>Analyst summary:</strong> {analystSummary}</span>
         </div>
 
@@ -1143,15 +1136,15 @@ export default function FeatureSelectionPage({
 
         {/* ── KPI Cards ───────────────────────────────────────────────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 24 }}>
-          <MetricCard icon="▤" label="Total Features" value={totalCount} accent={C.primary}
+          <MetricCard label="Total Features" value={totalCount} accent={C.primary}
             sub={isClustering ? 'all numeric columns' : `excluding target (${targetCol})`} />
-          <MetricCard icon="✓" label="Selected" value={selectedCount} accent={C.success}
+          <MetricCard label="Selected" value={selectedCount} accent={C.success}
             sub="will be used for training" />
-          <MetricCard icon="✕" label="Removed" value={removedCount} accent={C.muted}
+          <MetricCard label="Removed" value={removedCount} accent={C.muted}
             sub={removedCount > 0
               ? (isClustering ? `${redundantFeatureCount} redundant feature(s) detected` : `${weakCount} weak feature(s) detected`)
               : 'none removed yet'} />
-          <MetricCard icon="⚠" label="Redundant Pairs" value={data.n_multicol_warnings} accent={C.warning}
+          <MetricCard label="Redundant Pairs" value={data.n_multicol_warnings} accent={C.warning}
             sub={data.n_multicol_warnings ? 'pairs with |r| ≥ 0.85' : 'no multicollinearity'} />
         </div>
 
@@ -1172,7 +1165,7 @@ export default function FeatureSelectionPage({
               }>
               <CorrelationHeatmap data={data.correlation_matrix} multicolPairs={data.multicol_pairs || []} targetCol={targetCol} features={ft} />
             </ChartCard>
-            <ChartCard title="⚠ Multicollinearity Check"
+            <ChartCard title="Multicollinearity Check"
               sub="Pairs of features that are too similar to each other — keeping both adds redundancy, not signal.">
               <MulticolWarnings pairs={data.multicol_pairs || []} onNavigate={onNavigate} isClustering={isClustering} />
             </ChartCard>

@@ -200,3 +200,97 @@ class Report(models.Model):
 
     def __str__(self):
         return f"Report — {self.project.name} ({self.created_at.date()})"
+
+
+class TrainedModel(models.Model):
+    """
+    One durable row per real training run — Manual Mode's own
+    POST /training/train call (see backend-fastapi/training_router.py) or
+    Auto Mode's train node — registered here the same way DatasetVersion
+    rows are registered for pipeline steps (datasets/version_views.py's
+    VersionRegisterView): the frontend calls this endpoint right after the
+    FastAPI call that actually did the training succeeds, since FastAPI
+    itself never talks to Django directly for Manual Mode training the way
+    Auto Mode's runner.py does for Experiment.
+
+    Before this existed, "model history" lived ONLY in the browser's own
+    localStorage (prism_training_<file_path>__history) — invisible from any
+    other browser/device, and "Delete" in the UI only ever removed the
+    localStorage entry, never any durable record. This table is the real
+    source of truth now; the frontend still keeps a localStorage copy as a
+    fast, resilient local cache (same "Django optional" principle used
+    everywhere else in this project).
+    """
+    STATUS_CHOICES = [
+        ('trained', 'Trained'),
+        ('deleted', 'Deleted'),
+    ]
+    TASK_TYPE_CHOICES = [
+        ('classification', 'Classification'),
+        ('regression', 'Regression'),
+        ('clustering', 'Clustering'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='trained_models'
+    )
+    # Which processed dataset version this was trained against — null when
+    # the training input was still the raw upload, or that version has
+    # since been cascade-deleted by a redo of an earlier step.
+    dataset_version = models.ForeignKey(
+        DatasetVersion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='trained_models'
+    )
+
+    # model_id/model_file mirror training_router.py's own values exactly —
+    # the short uuid4[:8] and the .pkl path it wrote on FastAPI's disk — so
+    # Download keeps working long after the browser tab that trained it
+    # is gone.
+    model_id = models.CharField(max_length=20)
+    model_file = models.CharField(max_length=500)
+    algorithm = models.CharField(max_length=100, blank=True, default='')  # e.g. "decision_tree"
+    display_name = models.CharField(max_length=200, blank=True, default='')
+
+    task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES)
+    target_column = models.CharField(max_length=200, blank=True, default='')
+
+    # hyperparameters: whatever model_params this run was trained with
+    # {"n_estimators": 100, "max_depth": 5}
+    hyperparameters = models.JSONField(default=dict)
+
+    # metrics: the task-appropriate subset of /train's response —
+    # {"accuracy": 0.91, "f1": 0.87, ...} or {"r2": 0.88, "rmse": 12.4, ...}
+    # or {"n_clusters": 3, "inertia": 402.1, "entropy": 0.91}
+    metrics = models.JSONField(default=dict)
+
+    # confusion_matrix: [[50, 5], [8, 37]] — classification only, empty dict
+    # for regression/clustering
+    confusion_matrix = models.JSONField(default=dict)
+
+    # feature_importance: [{"feature": "glucose", "importance": 0.35}, ...]
+    # — only populated for the model types training_router.py's own
+    # _model_specific_viz computes this for (random_forest, svm, xgboost)
+    feature_importance = models.JSONField(default=dict)
+
+    # result_data: the FULL raw /training/train response (model_viz, class
+    # names, threshold arrays, cv scores, cluster preview rows, ...) — its
+    # shape genuinely varies by task_type/split_method/algorithm, not worth
+    # a column each. This is what lets a model restored on a browser that
+    # never trained it still render exactly like it originally did, instead
+    # of just showing its headline metrics.
+    result_data = models.JSONField(default=dict)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='trained')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.algorithm or 'model'} ({self.task_type}) — {self.project.name} [{self.status}]"

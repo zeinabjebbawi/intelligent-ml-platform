@@ -380,9 +380,18 @@ def compute_learning_curve(req: ComputeReq):
         for scoring in metrics:
             key = metric_key_map.get(scoring, scoring)
             try:
+                # n_jobs=1 (not 2, not -1): any n_jobs > 1 makes joblib fall
+                # back to process-based parallelism, which on Windows
+                # re-imports this module in each worker process rather than
+                # inheriting the parent's state — training_router.py's own
+                # grid-search hit this exact issue before (see its matching
+                # comment) and was fixed the same way. Confirmed live: this
+                # call hung indefinitely (90s+, no response, no error) with
+                # n_jobs=2 on a trivial 2000-row dataset; n_jobs=1 returns
+                # in under a second on the same input.
                 sizes_abs, train_sc, val_sc = learning_curve(
                     model, X, y, train_sizes=train_sizes_rel, cv=cv_splitter,
-                    scoring=scoring, n_jobs=2, error_score=0,
+                    scoring=scoring, n_jobs=1, error_score=0,
                 )
                 # neg_mean_absolute_error comes back negative by sklearn
                 # convention (scorers are "higher is better") — flip sign so

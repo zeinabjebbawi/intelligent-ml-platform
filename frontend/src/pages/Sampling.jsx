@@ -529,76 +529,76 @@ export default function SamplingPage({
   // real, functional cards here. ──────────────────────────────────────────
   const METHOD_INFO = {
     simple_random: {
-      label: 'Simple Random Undersampling', icon: '🎲',
+      label: 'Simple Random Undersampling',
       desc: 'Every row has equal probability of selection. Fast, unbiased baseline.',
       guidance: 'Best when classes are balanced and you want a quick size reduction.',
       showSlider: true, showStratify: false, showTargetCol: false,
     },
     stratified: {
-      label: 'Stratified Undersampling', icon: '⚖',
+      label: 'Stratified Undersampling',
       desc: 'Samples the same percentage from each class — preserves distribution.',
       guidance: 'Best when classes are imbalanced and you want to keep their exact ratio.',
       showSlider: true, showStratify: true, showTargetCol: false,
     },
     undersample: {
-      label: 'Majority Undersampling', icon: '⬇',
+      label: 'Majority Undersampling',
       desc: 'Reduces the majority class to match the minority class size.',
       guidance: 'Best when majority class is very large. May lose useful information.',
       showSlider: false, showStratify: false, showTargetCol: true,
     },
     oversample: {
-      label: 'Minority Oversampling (SMOTE)', icon: '⬆',
+      label: 'Minority Oversampling (SMOTE)',
       desc: 'Generates synthetic minority-class rows (via nearest-neighbor interpolation) to match the majority.',
       guidance: 'Best when minority class is very small. Watch for overfitting.',
       showSlider: false, showStratify: false, showTargetCol: true,
     },
     random_oversample: {
-      label: 'Random Oversampling', icon: '🔁',
+      label: 'Random Oversampling',
       desc: 'Duplicates existing minority rows at random until class sizes match — no synthesis, just exact copies.',
       guidance: 'Best for a quick balance fix. Simple and fast, but exact duplicates can cause overfitting.',
       showSlider: false, showStratify: false, showTargetCol: true,
     },
     adasyn: {
-      label: 'ADASYN', icon: '🧭',
+      label: 'ADASYN',
       desc: 'Like SMOTE, but generates more synthetic samples near the decision boundary — where classes overlap most.',
       guidance: 'Best when parts of the minority class are especially hard to learn, not just underrepresented.',
       showSlider: false, showStratify: false, showTargetCol: true,
       requiresNumericFeatures: true,
     },
     borderline_smote: {
-      label: 'Borderline-SMOTE', icon: '🚧',
+      label: 'Borderline-SMOTE',
       desc: 'Generates synthetic samples only from minority points already "in danger" of misclassification.',
       guidance: 'Best when misclassifications cluster right at the class boundary, not throughout the minority class.',
       showSlider: false, showStratify: false, showTargetCol: true,
       requiresNumericFeatures: true,
     },
     kmeans_smote: {
-      label: 'KMeans-SMOTE', icon: '🧩',
+      label: 'KMeans-SMOTE',
       desc: 'Clusters the data first, then generates synthetic samples only inside dense, safe cluster regions.',
       guidance: 'Best when the minority class has distinct sub-groups. Needs real cluster structure to work well.',
       showSlider: false, showStratify: false, showTargetCol: true,
       requiresNumericFeatures: true,
     },
     systematic: {
-      label: 'Systematic Sampling', icon: '⏭',
+      label: 'Systematic Sampling',
       desc: 'Selects every k-th row from the dataset. Fast and deterministic. Order-preserving.',
       guidance: 'Best for large ordered datasets where you want uniform coverage without randomness.',
       showSlider: true, showStratify: false, showTargetCol: false,
     },
     cluster: {
-      label: 'Cluster Sampling', icon: '⛓',
+      label: 'Cluster Sampling',
       desc: 'Divides data into groups (clusters) and randomly selects whole clusters.',
       guidance: 'Best when data has natural groupings and you want to preserve cluster-level patterns.',
       showSlider: false, showStratify: false, showTargetCol: false, showClusterN: true,
     },
     reservoir: {
-      label: 'Reservoir Sampling', icon: '🪣',
+      label: 'Reservoir Sampling',
       desc: 'Samples a fixed number of items from a stream in one pass — no dataset size needed.',
       guidance: 'Best for streaming data or when total dataset size is unknown at start.',
       showSlider: false, showStratify: false, showTargetCol: false, showReservoirN: true,
     },
     importance: {
-      label: 'Importance Sampling', icon: '🎯',
+      label: 'Importance Sampling',
       desc: 'Evaluates a target distribution using samples from a different accessible distribution.',
       guidance: 'Used in reinforcement learning and probabilistic modeling. Advanced use case.',
       showSlider: false, showStratify: false, showTargetCol: false,
@@ -623,13 +623,13 @@ export default function SamplingPage({
   // click-disabled in that state. See the method-card grid render below.
   const TIME_SAFE_METHODS = {
     DATE_RANGE: {
-      label: 'Date-Range Filtering', icon: '📅',
+      label: 'Date-Range Filtering',
       desc: 'Keep only rows within a date range. Shrinks the dataset while keeping the remaining timeline perfectly intact.',
       guidance: 'Best for removing stale historical data while preserving recent trends.',
       showDateRange: true,
     },
     SYSTEMATIC_TIME: {
-      label: 'Systematic Sampling', icon: '⏭',
+      label: 'Systematic Sampling',
       desc: 'Sort by time and keep every k-th row. Reduces data size while preserving the full timeline span.',
       guidance: 'Best for high-frequency data (e.g. minute-level) that you want to thin to hourly.',
       showStepSize: true,
@@ -899,7 +899,6 @@ export default function SamplingPage({
                           background: active ? C.successSoft : C.card,
                           textAlign: 'left', transition: 'all 0.15s',
                         }}>
-                        <div style={{ fontSize: 14, marginBottom: 2 }}>{info.icon}</div>
                         <div style={{ fontSize: 12, fontWeight: 700,
                           color: active ? C.success : C.text }}>{info.label}</div>
                         <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>
@@ -942,8 +941,7 @@ export default function SamplingPage({
                             opacity: cardDisabled ? 0.35 : 1,
                             pointerEvents: cardDisabled ? 'none' : 'auto',
                           }}>
-                          <div style={{ fontSize: 14, marginBottom: 2 }}>{info.icon}</div>
-                          <div style={{ fontSize: 12, fontWeight: 700,
+                            <div style={{ fontSize: 12, fontWeight: 700,
                             color: active && !cardDisabled ? C.primary : C.text }}>{info.label}</div>
                           <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>
                             {info.desc}
@@ -1222,8 +1220,8 @@ export default function SamplingPage({
             )}
             <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
               {[
-                { id: 'raw', label: '▤ Current Dataset' },
-                { id: 'sampled', label: '⚡ Sampled Results' },
+                { id: 'raw', label: 'Current Dataset' },
+                { id: 'sampled', label: 'Sampled Results' },
               ].map(tab => {
                 const active = previewTab === tab.id
                 const disabled = tab.id === 'sampled' && phase === 'config'

@@ -88,46 +88,6 @@ function analyzeColumns(columns, rows) {
 // is shown, until the user explicitly picks a target in the Dataset Setup
 // drawer (see suggestTaskType below, and DatasetSetupDrawer's Step 2).
 
-// Deliberately smaller than Diagnose's full health score (Global Rule 2:
-// this page must not pre-empt that stage) but still needs to react to more
-// than just missingness — a dataset with zero missing values but full of
-// duplicate rows or extreme outliers isn't actually a clean 100. Three
-// lightweight factors, same spirit as Diagnose's fuller formula: completeness,
-// duplicate rows, and IQR-based outlier density.
-function computeMiniHealth(rows, columns, columnsInfo) {
-  if (!rows.length || !columns.length) return 100
-
-  const totalCells = rows.length * columns.length
-  const totalMissing = columns.reduce((s, c) => s + (columnsInfo[c]?.missing || 0), 0)
-  const missingPct = (totalMissing / totalCells) * 100
-  const completeness = 100 - missingPct * 3
-
-  const seen = new Set()
-  let dupCount = 0
-  rows.forEach(r => {
-    const key = JSON.stringify(columns.map(c => r[c]))
-    if (seen.has(key)) dupCount++; else seen.add(key)
-  })
-  const dupScore = 100 - (dupCount / rows.length) * 100 * 3
-
-  const numericCols = columns.filter(c => columnsInfo[c]?.type === 'numerical')
-  let totalOutliers = 0
-  numericCols.forEach(col => {
-    const vals = rows.map(r => r[col]).filter(v => typeof v === 'number').sort((a, b) => a - b)
-    if (vals.length < 4) return
-    const q = (p) => {
-      const pos = (vals.length - 1) * p, base = Math.floor(pos), rest = pos - base
-      return vals[base + 1] !== undefined ? vals[base] + rest * (vals[base + 1] - vals[base]) : vals[base]
-    }
-    const Q1 = q(0.25), Q3 = q(0.75), IQR = Q3 - Q1
-    const lower = Q1 - 1.5 * IQR, upper = Q3 + 1.5 * IQR
-    totalOutliers += vals.filter(v => v < lower || v > upper).length
-  })
-  const outlierScore = 100 - Math.min(100, (totalOutliers / (rows.length * (numericCols.length || 1))) * 1000)
-
-  return Math.round(Math.max(0, Math.min(100, completeness * 0.5 + dupScore * 0.25 + outlierScore * 0.25)))
-}
-
 // Task-type SUGGESTION — only ever called AFTER the user explicitly picks a
 // target column in the drawer (never to pre-suggest a target column itself).
 // Called "suggested", never "detected": this is a rule-based guess, not a
@@ -486,70 +446,70 @@ function genWine() {
 
 const REFERENCE_DATASETS = [
   {
-    id: 'iris', filename: 'iris.csv', icon: '🌸',
+    id: 'iris', filename: 'iris.csv',
     title: 'iris.csv',
     description: 'Classic dataset for pattern recognition. Contains measurements of 150 iris flowers.',
     rowsLabel: '150 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: SPECIES',
     generate: genIris,
   },
   {
-    id: 'diabetes', filename: 'diabetes.csv', icon: '🩸',
+    id: 'diabetes', filename: 'diabetes.csv',
     title: 'diabetes.csv',
     description: 'Pima Indians Diabetes Database. Predict the onset of diabetes based on diagnostic measures.',
     rowsLabel: '768 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: OUTCOME',
     generate: genDiabetes,
   },
   {
-    id: 'housing', filename: 'housing.csv', icon: '🏠',
+    id: 'housing', filename: 'housing.csv',
     title: 'housing.csv',
     description: 'Boston House Prices dataset. Predict median value of owner-occupied homes.',
     rowsLabel: '506 ROWS', taskLabel: 'REGRESSION', targetLabel: 'TARGET: MEDV',
     generate: genHousing,
   },
   {
-    id: 'cancer', filename: 'cancer.csv', icon: '⚕',
+    id: 'cancer', filename: 'cancer.csv',
     title: 'cancer.csv',
     description: 'Breast Cancer Wisconsin (Diagnostic) Data Set. Predict whether cancer is benign or malignant.',
     rowsLabel: '569 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: DIAGNOSIS',
     generate: genCancer,
   },
   {
-    id: 'weather-nominal', filename: 'weather.nominal.csv', icon: '☁',
+    id: 'weather-nominal', filename: 'weather.nominal.csv',
     title: 'weather.nominal.csv',
     description: 'Classic Quinlan "play tennis" dataset. Predict whether conditions are good for play, all-categorical.',
     rowsLabel: '14 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: PLAY',
     generate: genWeatherNominal,
   },
   {
-    id: 'weather-numeric', filename: 'weather.numeric.csv', icon: '🌦',
+    id: 'weather-numeric', filename: 'weather.numeric.csv',
     title: 'weather.numeric.csv',
     description: 'Same play-tennis dataset with numeric temperature and humidity instead of categorical bins.',
     rowsLabel: '14 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: PLAY',
     generate: genWeatherNumeric,
   },
   {
-    id: 'glass', filename: 'glass.csv', icon: '🔷',
+    id: 'glass', filename: 'glass.csv',
     title: 'glass.csv',
     description: 'Glass Identification dataset. Predict glass type from refractive index and oxide content — forensic classic.',
     rowsLabel: '216 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: TYPE',
     generate: genGlass,
   },
   {
-    id: 'cpu', filename: 'cpu.csv', icon: '🖥',
+    id: 'cpu', filename: 'cpu.csv',
     title: 'cpu.csv',
     description: 'Computer Hardware dataset. Predict published relative CPU performance from cycle time, memory and cache.',
     rowsLabel: '209 ROWS', taskLabel: 'REGRESSION', targetLabel: 'TARGET: PRP',
     generate: genCpu,
   },
   {
-    id: 'airline', filename: 'airline.csv', icon: '✈',
+    id: 'airline', filename: 'airline.csv',
     title: 'airline.csv',
     description: 'Flight records with distance, departure time and weather alerts. Predict whether a flight is delayed.',
     rowsLabel: '300 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: DELAYED',
     generate: genAirline,
   },
   {
-    id: 'wine', filename: 'wine.csv', icon: '🍷',
+    id: 'wine', filename: 'wine.csv',
     title: 'wine.csv',
     description: 'Wine recognition dataset. Predict the cultivar of a wine from its chemical analysis — 3 classes.',
     rowsLabel: '178 ROWS', taskLabel: 'CLASSIFICATION', targetLabel: 'TARGET: CULTIVAR',
@@ -648,7 +608,6 @@ function ReferenceDatasetCard({ ds, C, active, onClick }) {
         boxShadow: active ? `0 0 0 3px ${C.primarySoft}` : shadow2, transition: 'all 0.15s',
       }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 18 }}>{ds.icon}</span>
         <span style={{ fontWeight: 800, fontSize: 14, color: C.text }}>{ds.title}</span>
       </div>
       <p style={{
@@ -731,28 +690,6 @@ function ColumnChips({ columns, columnsInfo, target, C }) {
 // exists, and therefore no task type can be estimated, until a target
 // column is selected. See DatasetSetupDrawer's Step 2 for where the (fixed,
 // ratio-based) detection now actually runs.
-
-function MiniHealthBadge({ pct, C }) {
-  const color = pct >= 90 ? C.success : pct >= 70 ? C.warning : C.danger
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, background: C.card,
-      border: `1px solid ${C.border}`, borderRadius: 14, padding: '16px 20px', height: '100%',
-    }}>
-      <span style={{
-        width: 34, height: 34, borderRadius: '50%', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', fontSize: 12, fontWeight: 900, color,
-        background: `${color}18`, border: `2px solid ${color}`, flexShrink: 0,
-      }}>
-        {pct}
-      </span>
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, color: C.muted }}>DATA HEALTH</div>
-        <div style={{ fontSize: 11, color: C.muted }}>Full breakdown on the Diagnose page →</div>
-      </div>
-    </div>
-  )
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PREVIEW TABLE — max 15 rows, horizontally scrollable. `target` is the
@@ -858,7 +795,7 @@ function StepIndicator({ step, C }) {
   )
 }
 
-function ChoiceCard({ icon, title, subtitle, tag, selected, onClick, C }) {
+function ChoiceCard({ title, subtitle, tag, selected, onClick, C }) {
   return (
     <div onClick={onClick} className="prism-choice-card"
       style={{
@@ -874,7 +811,6 @@ function ChoiceCard({ icon, title, subtitle, tag, selected, onClick, C }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>✓</span>
       )}
-      <div style={{ fontSize: 24, marginBottom: 8 }}>{icon}</div>
       <div style={{ fontWeight: 800, fontSize: 15, color: C.text, marginBottom: 4 }}>{title}</div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>{subtitle}</div>
       <Pill label={tag} tone={tag.includes('Unsupervised') ? 'regression' : 'classification'} C={C} />
@@ -1021,11 +957,11 @@ function DatasetSetupDrawer({
                 This determines which machine learning workflows we'll show you.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <ChoiceCard icon="🎯" title="Yes, I have a target column"
+                <ChoiceCard title="Yes, I have a target column"
                   subtitle="I want the model to predict a specific column."
                   tag="Supervised Learning" selected={isLabeled === true}
                   onClick={() => setIsLabeled(true)} C={C} />
-                <ChoiceCard icon="🔍" title="No, I want to discover patterns"
+                <ChoiceCard title="No, I want to discover patterns"
                   subtitle="I don't have a column to predict. Find groups in my data."
                   tag="Unsupervised · Clustering" selected={isLabeled === false}
                   onClick={() => setIsLabeled(false)} C={C} />
@@ -1211,7 +1147,7 @@ function DatasetSetupDrawer({
                       border: `1px solid ${C.primary}`, background: C.primarySoft, color: C.primary,
                       cursor: preparingAutoMode ? 'default' : 'pointer', opacity: preparingAutoMode ? 0.6 : 1,
                     }}>
-                    {preparingAutoMode ? 'Preparing…' : '🤖 Run Auto Mode — let the agent handle the whole pipeline'}
+                    {preparingAutoMode ? 'Preparing…' : 'Run Auto Mode — let the agent handle the whole pipeline'}
                   </button>
                 </>
               )}
@@ -1282,7 +1218,6 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
       source, filename, sizeLabel: formatBytes(sizeBytes),
       rowCount: rows.length, columnCount: columns.length,
       columns, columnsInfo, rows,
-      health: computeMiniHealth(rows, columns, columnsInfo),
     }
   }, [])
 
@@ -1441,16 +1376,8 @@ export default function UploadPage({ projectData, onNext, onUpdateData, active, 
               </div>
 
               {/* No "Problem Type" widget here — removed along with the
-                  target-guessing it depended on (see NOTE above ColumnChips
-                  and above MiniHealthBadge). Data Health doesn't need a
-                  target column to mean something, so it's the only KPI that
-                  belongs on this pre-selection page; sized to its own
-                  content now rather than stretched to fill a 2-column grid
-                  that no longer has a second item. */}
-              <div style={{ maxWidth: 340, marginBottom: 24 }}>
-                <MiniHealthBadge pct={dataset.health} C={C} />
-              </div>
-
+                  target-guessing it depended on (see NOTE above
+                  ColumnChips). */}
               <div style={{ marginBottom: 24 }}>
                 <PreviewTable columns={dataset.columns} rows={dataset.rows}
                   target={selectedTarget} C={C} />

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Experiment, AgentDecision, InsightCard, WhatIfSimulation, Report
+from .models import Experiment, AgentDecision, InsightCard, WhatIfSimulation, Report, TrainedModel
 
 
 @admin.register(Experiment)
@@ -27,3 +27,9 @@ class WhatIfSimulationAdmin(admin.ModelAdmin):
 @admin.register(Report)
 class ReportAdmin(admin.ModelAdmin):
     list_display = ['project', 'experiment', 'created_at']
+
+
+@admin.register(TrainedModel)
+class TrainedModelAdmin(admin.ModelAdmin):
+    list_display = ['algorithm', 'task_type', 'status', 'project', 'created_at']
+    list_filter = ['task_type', 'status']

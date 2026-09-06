@@ -1687,7 +1687,7 @@ export default function DiagnosePage({ projectData, onNext, onUpdateData,
   const selectionBg = `${C.primary}4D`
 
   return (
-    <div className="diagnose-page" style={{ minHeight: '100vh', background: C.bg, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
+    <div className="diagnose-page" style={{ background: C.bg, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
       <style>{`
         .diag-focus-fix input:focus-visible { outline: 2px solid ${focusRingColor}; outline-offset: 2px; }
         .diagnose-page ::selection { background-color: ${selectionBg}; }

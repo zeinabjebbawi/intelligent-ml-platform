@@ -15,7 +15,7 @@ import ReportPage from './pages/Report';
 import LandingPage from './pages/Landing';
 import WorkspacePage from './pages/Workspace';
 import AutoModePanel from './components/AutoModePanel';
-import { datasetsAPI, versionsAPI } from './api';
+import { datasetsAPI, versionsAPI, trainedModelsAPI } from './api';
 import useVersionHistory, { STEP_ORDER } from './hooks/useVersionHistory';
 import TopNav from './components/TopNav';
 import { useTheme } from './theme';
@@ -254,6 +254,37 @@ function App() {
       }
       localStorage.setItem(activeKey, JSON.stringify(result));
     } catch { /* localStorage unavailable — the model is still real and downloadable via lastModelPath */ }
+
+    // Also registers this run in Django's TrainedModel table (see
+    // experiments/trained_model_views.py), the same durable record
+    // TrainTest.jsx's own handleTrain writes to for a manual run — without
+    // this, an Auto-Mode-trained model would only ever show up in Model
+    // History on the SAME browser that ran Auto Mode, silently defeating
+    // the whole point of moving model history into the database. Fire-
+    // and-forget: the model itself is already real and saved regardless.
+    if (projectId) {
+      const taskType = uploadMeta?.taskType;
+      const datasetVersion = versionHistory.versions.find(v => v.filePath === trainingFilePath)?.id || null;
+      const metricsByTask = {
+        classification: { accuracy: result.accuracy, f1: result.f1, precision: result.precision, recall: result.recall },
+        regression:     { r2: result.r2, mae: result.mae, rmse: result.rmse },
+        clustering:     { n_clusters: result.n_clusters, inertia: result.inertia, entropy: result.entropy },
+      };
+      trainedModelsAPI.register(projectId, {
+        dataset_version: datasetVersion,
+        model_id: result.model_id,
+        model_file: result.model_file,
+        algorithm: result.model_name,
+        display_name: result.display_name,
+        task_type: result.task_type || taskType,
+        target_column: uploadMeta?.targetColumn || '',
+        hyperparameters: result.model_params || {},
+        metrics: metricsByTask[taskType] || {},
+        confusion_matrix: result.confusion_matrix || {},
+        feature_importance: result.model_viz?.feature_importance || [],
+        result_data: result,
+      }).catch(() => { /* Django optional — the model is still real and downloadable via lastModelPath */ });
+    }
   };
 
   // Shared by every live-progress tick AND the final completion: resolve
@@ -669,7 +700,7 @@ function App() {
 
   if (stage === 'diagnose') {
     return (
-      <div>
+      <div style={{ minHeight: '100vh', background: C.bg }}>
         <DiagnosePage
           projectData={{ projectId, ...uploadMeta }}
           onUpdateData={(update) => { if (update.cleanedFilePath) setFilePath(update.cleanedFilePath); }}
@@ -684,7 +715,7 @@ function App() {
           onNavigate={handleNavigate}
           furthestOrder={furthestOrder}
         />
-        <div style={{ textAlign: 'center', padding: '16px 0', background: '#0a0e15' }}>
+        <div style={{ textAlign: 'center', padding: '0 0 16px' }}>
           <AdvanceButton C={C} label="Continue to Cleaning →" onClick={goToCleaning} working={advancingToCleaning} />
         </div>
       </div>
