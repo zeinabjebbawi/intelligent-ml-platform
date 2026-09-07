@@ -2,25 +2,27 @@ import { useEffect, useRef, useState } from 'react'
 import { projectsAPI } from '../api'
 import { formatDjangoErrors } from '../utils/authErrors'
 import logout from '../utils/logout'
-import { GATE, GATE_FONT } from '../constants/darkGate'
-import CrystalScene from '../components/CrystalScene'
+import { LIGHT_GATE as GATE } from '../constants/lightGate'
+
+const FONT = "'Inter', 'Helvetica Neue', Arial, sans-serif"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Workspace — the hub between logging in and the actual pipeline. Lists the
 // user's real past projects (fetched from Django) in a left-side drawer,
 // offers a "+ New Project" action that names and creates a real project then
-// hands control back to App.jsx to enter the pipeline on Upload, and shows a
-// center visual.
+// hands control back to App.jsx to enter the pipeline on Upload.
 //
-// The center visual is a placeholder: the user described a specific
-// animation they'll provide "exactly" to drop in here, so this reuses
-// CrystalScene (already built for Landing) pinned at progress=1 — its fully-
-// bloomed, idly-animating state — as a reasonable stand-in rather than an
-// empty box, swapped out wholesale once the real one arrives.
+// Reskinned onto the same light palette as the new Landing page (LIGHT_GATE)
+// instead of the old dark GATE — the WebGL CrystalScene placeholder center
+// visual is dropped along with it (it was always a stand-in — see the
+// removed comment this file used to carry — and a dark WebGL scene has no
+// equivalent that reads correctly on a white page), replaced by a plain
+// light hero band with real explanatory copy instead of a decorative one.
+// Root stays `overflow:hidden`/no page scroll, same as before — the project
+// list scrolls inside its own drawer, not the page.
 //
-// Past-project rows are now real: click one to open it (onProjectOpened,
-// wired the same way onProjectCreated already was), or use the ⋮ menu to
-// rename or delete it without opening it first.
+// Past-project rows are real: click one to open it (onProjectOpened), or
+// use the ⋮ menu to rename or delete it without opening it first.
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Workspace({ onProjectCreated, onProjectOpened }) {
   const [projects, setProjects] = useState([])
@@ -130,28 +132,39 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
     color: GATE.white, fontSize: 12.5, padding: '9px 10px', borderRadius: 6, cursor: 'pointer',
     fontFamily: 'inherit',
   }
+  const inputUnderlineStyle = {
+    width: '100%', background: 'transparent', border: 'none',
+    borderBottom: `1px solid ${GATE.border}`, color: GATE.white,
+    fontSize: 16, fontFamily: 'inherit', padding: '6px 2px 12px', outline: 'none', boxSizing: 'border-box',
+    marginBottom: 20,
+  }
+  const onUnderlineFocus = (e) => { e.target.style.borderBottomColor = GATE.white }
+  const onUnderlineBlur = (e) => { e.target.style.borderBottomColor = GATE.border }
 
   return (
-    <div style={{ background: GATE.bg, minHeight: '100vh', fontFamily: GATE_FONT, position: 'relative', overflow: 'hidden' }}>
+    <div style={{ background: GATE.bg, height: '100vh', fontFamily: FONT, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div style={{
         position: 'relative', zIndex: 20, display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between', padding: '22px 32px',
+        justifyContent: 'space-between', padding: '18px 32px', borderBottom: `1px solid ${GATE.border}`, flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
           <button onClick={() => setDrawerOpen((o) => !o)} title="Project history" style={{
             background: 'none', border: `1px solid ${GATE.border}`, borderRadius: 8,
             width: 34, height: 34, color: GATE.white, fontSize: 15, cursor: 'pointer',
           }}>☰</button>
-          <span style={{ fontSize: 13, letterSpacing: '0.35em', fontWeight: 600, opacity: 0.85, color: GATE.white }}>PRISM</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 11, height: 11, background: GATE.success, borderRadius: 3, transform: 'rotate(45deg)', display: 'inline-block' }} />
+            <span style={{ fontSize: 13, letterSpacing: '0.3em', fontWeight: 700, color: GATE.white }}>PRISM</span>
+          </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <button onClick={openModal} style={{
-            display: 'flex', alignItems: 'center', gap: 8, background: 'none',
-            border: `1px solid ${GATE.border}`, borderRadius: 20, padding: '8px 18px 8px 14px',
-            color: GATE.white, fontSize: 13, letterSpacing: '0.03em', cursor: 'pointer', fontFamily: 'inherit',
+            display: 'flex', alignItems: 'center', gap: 8, color: '#fff',
+            background: GATE.success, border: 'none', borderRadius: 20, padding: '8px 18px 8px 14px',
+            fontSize: 13, fontWeight: 700, letterSpacing: '0.02em', cursor: 'pointer', fontFamily: 'inherit',
           }}>
             <span style={{ fontSize: 15, lineHeight: 1 }}>+</span> New Project
           </button>
@@ -161,29 +174,37 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
         </div>
       </div>
 
-      {/* ── Center visual (placeholder — see file header) — full-bleed,
-          same as Landing.jsx's own hero, not boxed into a small tile. ──── */}
-      <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
-        <CrystalScene progress={1} />
-      </div>
+      {/* ── Description hero — explains where the user is and what the two
+          real actions on this page are (open a past project from the
+          history drawer, or start a new one), instead of the old decorative
+          center visual. Not scrollable: this section simply fills whatever
+          vertical space the top bar/drawer leave, same as every other
+          fixed-viewport page in the app. ── */}
       <div style={{
-        position: 'absolute', left: '50%', bottom: '10%', transform: 'translateX(-50%)',
-        textAlign: 'center', letterSpacing: '0.35em', fontSize: 13, textTransform: 'uppercase',
-        opacity: 0.75, pointerEvents: 'none', color: GATE.white, zIndex: 2,
+        flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 32px',
       }}>
-        Your workspace
-        <small style={{ display: 'block', marginTop: 8, letterSpacing: '0.15em', fontSize: 10, color: GATE.muted, textTransform: 'none' }}>
-          Start a new project, or pick up an old one
-        </small>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.3em', textTransform: 'uppercase', color: GATE.success, marginBottom: 18 }}>
+          Your Workspace
+        </div>
+        <h1 style={{ fontSize: 30, fontWeight: 800, margin: '0 0 14px', color: GATE.white, maxWidth: 560 }}>
+          Pick up a past project, or start a new one
+        </h1>
+        <p style={{ fontSize: 14, color: GATE.muted, maxWidth: 480, lineHeight: 1.7, margin: 0 }}>
+          Open <strong style={{ color: GATE.white, fontWeight: 600 }}>☰ project history</strong> on the left to revisit
+          any project you've worked on — every dataset, version, and trained model is saved exactly as you left it —
+          or start a fresh one with the button above.
+        </p>
       </div>
 
       {/* ── Left drawer ─────────────────────────────────────────────────── */}
       {drawerOpen && (
-        <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29, background: 'rgba(0,0,0,0.4)' }} />
+        <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29, background: 'rgba(15,23,42,0.35)' }} />
       )}
       <div style={{
         position: 'fixed', top: 0, left: 0, bottom: 0, width: 280, zIndex: 30,
         background: GATE.panel, borderRight: `1px solid ${GATE.border}`,
+        boxShadow: drawerOpen ? '8px 0 32px rgba(15,23,42,0.10)' : 'none',
         transform: drawerOpen ? 'translateX(0)' : 'translateX(-100%)',
         transition: 'transform 0.3s ease', display: 'flex', flexDirection: 'column',
       }}>
@@ -215,10 +236,10 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
                   opacity: openingId && openingId !== p.id ? 0.4 : 1,
                   transition: 'background 0.15s, opacity 0.15s',
                 }}
-                onMouseEnter={(e) => { if (!openingId) e.currentTarget.style.background = 'rgba(255,255,255,0.05)' }}
+                onMouseEnter={(e) => { if (!openingId) e.currentTarget.style.background = 'rgba(15,23,42,0.04)' }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
               >
-                <div style={{ fontSize: 13.5, color: GATE.white, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: 13.5, color: GATE.white, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {p.name}
                 </div>
                 <div style={{ fontSize: 11, color: GATE.muted, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -236,7 +257,7 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
                 style={{
                   position: 'absolute', top: 10, right: 10, width: 26, height: 26,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: openMenuId === p.id ? 'rgba(255,255,255,0.12)' : 'none',
+                  background: openMenuId === p.id ? 'rgba(15,23,42,0.08)' : 'none',
                   border: 'none', borderRadius: 6, color: GATE.muted, fontSize: 16,
                   cursor: 'pointer', lineHeight: 1, padding: 0,
                 }}
@@ -252,15 +273,15 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
                   <div onClick={(e) => e.stopPropagation()} style={{
                     position: 'absolute', top: 40, right: 10, zIndex: 35, width: 158,
                     background: GATE.panel, border: `1px solid ${GATE.border}`, borderRadius: 10,
-                    boxShadow: '0 14px 32px rgba(0,0,0,0.5)', overflow: 'hidden', padding: 4,
+                    boxShadow: '0 14px 32px rgba(15,23,42,0.16)', overflow: 'hidden', padding: 4,
                   }}>
                     <button onClick={() => handleOpen(p)} style={menuItemStyle}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(15,23,42,0.06)' }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}>
                       Open
                     </button>
                     <button onClick={() => openRenameModal(p)} style={menuItemStyle}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(15,23,42,0.06)' }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}>
                       Rename
                     </button>
@@ -280,24 +301,17 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
       {/* ── New Project modal ───────────────────────────────────────────── */}
       {modalOpen && (
         <div onClick={closeModal} style={{
-          position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.55)',
+          position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(15,23,42,0.45)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
         }}>
           <form onClick={(e) => e.stopPropagation()} onSubmit={handleCreate} style={{
             width: '100%', maxWidth: 380, background: GATE.panel, border: `1px solid ${GATE.border}`,
-            borderRadius: 14, padding: '28px 30px',
+            borderRadius: 14, padding: '28px 30px', boxShadow: '0 24px 60px rgba(15,23,42,0.18)',
           }}>
-            <div style={{ fontSize: 17, fontWeight: 300, color: GATE.white, marginBottom: 20 }}>Name your project</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: GATE.white, marginBottom: 20 }}>Name your project</div>
             <input autoFocus type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)}
               placeholder="e.g. Customer Churn Analysis"
-              style={{
-                width: '100%', background: 'transparent', border: 'none',
-                borderBottom: '1px solid rgba(255,255,255,0.2)', color: GATE.white,
-                fontSize: 16, fontFamily: 'inherit', padding: '6px 2px 12px', outline: 'none', boxSizing: 'border-box',
-                marginBottom: 20,
-              }}
-              onFocus={(e) => { e.target.style.borderBottomColor = GATE.white }}
-              onBlur={(e) => { e.target.style.borderBottomColor = 'rgba(255,255,255,0.2)' }}
+              style={inputUnderlineStyle} onFocus={onUnderlineFocus} onBlur={onUnderlineBlur}
             />
             {createError && (
               <div style={{ background: GATE.dangerBg, border: `1px solid ${GATE.danger}55`, borderRadius: 8, padding: '9px 12px', color: GATE.danger, fontSize: 12, marginBottom: 18 }}>
@@ -309,7 +323,7 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
                 background: 'none', border: 'none', color: GATE.muted, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', padding: '8px 4px',
               }}>Cancel</button>
               <button type="submit" disabled={creating} style={{
-                background: 'none', border: 'none', color: GATE.white, fontSize: 14, letterSpacing: '0.03em',
+                background: 'none', border: 'none', color: GATE.success, fontSize: 14, fontWeight: 700, letterSpacing: '0.03em',
                 cursor: creating ? 'default' : 'pointer', opacity: creating ? 0.6 : 1, fontFamily: 'inherit', padding: '8px 4px',
                 display: 'flex', alignItems: 'center', gap: 8,
               }}>
@@ -323,24 +337,17 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
       {/* ── Rename Project modal ────────────────────────────────────────── */}
       {renameTarget && (
         <div onClick={closeRenameModal} style={{
-          position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.55)',
+          position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(15,23,42,0.45)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
         }}>
           <form onClick={(e) => e.stopPropagation()} onSubmit={handleRenameSubmit} style={{
             width: '100%', maxWidth: 380, background: GATE.panel, border: `1px solid ${GATE.border}`,
-            borderRadius: 14, padding: '28px 30px',
+            borderRadius: 14, padding: '28px 30px', boxShadow: '0 24px 60px rgba(15,23,42,0.18)',
           }}>
-            <div style={{ fontSize: 17, fontWeight: 300, color: GATE.white, marginBottom: 20 }}>Rename project</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: GATE.white, marginBottom: 20 }}>Rename project</div>
             <input autoFocus type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)}
               placeholder="e.g. Customer Churn Analysis"
-              style={{
-                width: '100%', background: 'transparent', border: 'none',
-                borderBottom: '1px solid rgba(255,255,255,0.2)', color: GATE.white,
-                fontSize: 16, fontFamily: 'inherit', padding: '6px 2px 12px', outline: 'none', boxSizing: 'border-box',
-                marginBottom: 20,
-              }}
-              onFocus={(e) => { e.target.style.borderBottomColor = GATE.white }}
-              onBlur={(e) => { e.target.style.borderBottomColor = 'rgba(255,255,255,0.2)' }}
+              style={inputUnderlineStyle} onFocus={onUnderlineFocus} onBlur={onUnderlineBlur}
             />
             {renameError && (
               <div style={{ background: GATE.dangerBg, border: `1px solid ${GATE.danger}55`, borderRadius: 8, padding: '9px 12px', color: GATE.danger, fontSize: 12, marginBottom: 18 }}>
@@ -352,7 +359,7 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
                 background: 'none', border: 'none', color: GATE.muted, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', padding: '8px 4px',
               }}>Cancel</button>
               <button type="submit" disabled={renaming} style={{
-                background: 'none', border: 'none', color: GATE.white, fontSize: 14, letterSpacing: '0.03em',
+                background: 'none', border: 'none', color: GATE.success, fontSize: 14, fontWeight: 700, letterSpacing: '0.03em',
                 cursor: renaming ? 'default' : 'pointer', opacity: renaming ? 0.6 : 1, fontFamily: 'inherit', padding: '8px 4px',
                 display: 'flex', alignItems: 'center', gap: 8,
               }}>
@@ -366,16 +373,16 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
       {/* ── Delete Project confirmation ─────────────────────────────────── */}
       {deleteTarget && (
         <div onClick={closeDeleteModal} style={{
-          position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.55)',
+          position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(15,23,42,0.45)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
         }}>
           <div onClick={(e) => e.stopPropagation()} style={{
             width: '100%', maxWidth: 380, background: GATE.panel, border: `1px solid ${GATE.border}`,
-            borderRadius: 14, padding: '28px 30px',
+            borderRadius: 14, padding: '28px 30px', boxShadow: '0 24px 60px rgba(15,23,42,0.18)',
           }}>
-            <div style={{ fontSize: 17, fontWeight: 300, color: GATE.white, marginBottom: 10 }}>Delete project?</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: GATE.white, marginBottom: 10 }}>Delete project?</div>
             <p style={{ fontSize: 13, color: GATE.muted, lineHeight: 1.6, margin: '0 0 22px' }}>
-              <strong style={{ color: GATE.white, fontWeight: 500 }}>{deleteTarget.name}</strong> and every dataset,
+              <strong style={{ color: GATE.white, fontWeight: 600 }}>{deleteTarget.name}</strong> and every dataset,
               version, and trained model inside it will be permanently deleted. This can't be undone.
             </p>
             {deleteError && (
@@ -388,7 +395,7 @@ export default function Workspace({ onProjectCreated, onProjectOpened }) {
                 background: 'none', border: 'none', color: GATE.muted, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', padding: '8px 4px',
               }}>Cancel</button>
               <button type="button" onClick={handleDeleteConfirm} disabled={deleting} style={{
-                background: 'none', border: 'none', color: GATE.danger, fontSize: 14, letterSpacing: '0.03em',
+                background: 'none', border: 'none', color: GATE.danger, fontSize: 14, fontWeight: 700, letterSpacing: '0.03em',
                 cursor: deleting ? 'default' : 'pointer', opacity: deleting ? 0.6 : 1, fontFamily: 'inherit', padding: '8px 4px',
               }}>
                 {deleting ? 'Deleting…' : 'Delete project'}

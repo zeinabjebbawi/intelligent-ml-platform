@@ -1,20 +1,23 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { authAPI } from '../api'
 import { formatDjangoErrors } from '../utils/authErrors'
-import { GATE as COLORS, GATE_SPECTRUM as SPECTRUM } from '../constants/darkGate'
+import { GATE, GATE_SPECTRUM } from '../constants/darkGate'
 
 const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuthSection — the "gate" the scroll hero releases into. Styling is ported
-// from prism_prototype_v2.html's .gate/.tabs/.field/.continue rules — a
-// fixed dark palette independent of the app's own light/dark theme toggle,
-// the same deliberate one-off deviation Report.jsx's gradient header already
-// makes for a page that isn't part of the ordinary page furniture.
+// AuthSection — the real login/register form, dropped into whatever gate
+// page hosts it (Landing's new light hero today; originally a fixed dark
+// palette independent of the app's own light/dark theme toggle). `palette`/
+// `spectrum` default to that original dark GATE so nothing else using this
+// component changes — a caller on a light page passes LIGHT_GATE instead.
+// `palette.white` is a legacy key name from GATE: it means "the ink color
+// that reads on this palette's `bg`", not literally white — LIGHT_GATE's
+// own `white` is a dark ink color for exactly this reason.
 //
-// Two adaptations from the source mockup, both required for this to
-// actually work against the real backend (register requires a password,
-// min 8 characters) rather than just look right:
+// Two adaptations from the original prism_prototype_v2.html mockup, both
+// required for this to actually work against the real backend (register
+// requires a password, min 8 characters) rather than just look right:
 //   - the mockup's Create Account form had no password field at all — one
 //     (plus a client-only confirm field) is added here, styled identically.
 //   - the mockup's single "Name" input is sent as `first_name`; `last_name`
@@ -22,26 +25,32 @@ const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
 //     often enough (multi-word first names, etc.) that leaving it as one
 //     field is the more honest choice until real separate fields are wanted.
 // ─────────────────────────────────────────────────────────────────────────────
-function Field({ label, id, ...inputProps }) {
+function Field({ label, id, colors, borderRest, ...inputProps }) {
   return (
     <div>
-      <label htmlFor={id} style={{ display: 'block', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase', color: COLORS.muted, marginBottom: 10 }}>
+      <label htmlFor={id} style={{ display: 'block', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase', color: colors.muted, marginBottom: 10 }}>
         {label}
       </label>
       <input id={id} {...inputProps}
         style={{
           width: '100%', background: 'transparent', border: 'none',
-          borderBottom: '1px solid rgba(255,255,255,0.2)', color: COLORS.white,
+          borderBottom: `1px solid ${borderRest}`, color: colors.white,
           fontSize: 18, fontFamily: 'inherit', padding: '6px 2px 12px', outline: 'none',
         }}
-        onFocus={(e) => { e.target.style.borderBottomColor = COLORS.white }}
-        onBlur={(e) => { e.target.style.borderBottomColor = 'rgba(255,255,255,0.2)' }}
+        onFocus={(e) => { e.target.style.borderBottomColor = colors.white }}
+        onBlur={(e) => { e.target.style.borderBottomColor = borderRest }}
       />
     </div>
   )
 }
 
-export default function AuthSection({ onAuthenticated }) {
+export default function AuthSection({ onAuthenticated, palette = GATE, spectrum = GATE_SPECTRUM }) {
+  const COLORS = palette
+  const SPECTRUM = spectrum
+  // The dark gate's inputs use a translucent white hairline that only reads
+  // against a dark bg; a light palette needs its own (opaque) border color
+  // instead of "translucent white", which would be invisible on white.
+  const borderRest = palette === GATE ? 'rgba(255,255,255,0.2)' : COLORS.border
   const [mode, setMode] = useState('login') // 'login' | 'register'
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -150,13 +159,13 @@ export default function AuthSection({ onAuthenticated }) {
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 30 }}>
           {mode === 'register' && (
-            <Field id="auth-name" label="Name" type="text" placeholder="Your full name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Field id="auth-name" label="Name" type="text" placeholder="Your full name" value={name} onChange={(e) => setName(e.target.value)} colors={COLORS} borderRest={borderRest} />
           )}
-          <Field id="auth-email" label="Email" type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+          <Field id="auth-email" label="Email" type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" colors={COLORS} borderRest={borderRest} />
           <Field id="auth-password" label="Password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)}
-            autoComplete={mode === 'register' ? 'new-password' : 'current-password'} />
+            autoComplete={mode === 'register' ? 'new-password' : 'current-password'} colors={COLORS} borderRest={borderRest} />
           {mode === 'register' && (
-            <Field id="auth-confirm-password" label="Confirm password" type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+            <Field id="auth-confirm-password" label="Confirm password" type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} colors={COLORS} borderRest={borderRest} />
           )}
 
           <button type="submit" disabled={submitting}
@@ -174,7 +183,7 @@ export default function AuthSection({ onAuthenticated }) {
 
         <p style={{ textAlign: 'center', fontSize: 12, color: COLORS.muted, marginTop: 40, lineHeight: 1.6 }}>
           Prefer to look around first?{' '}
-          <a href="#" onClick={(e) => e.preventDefault()} style={{ color: COLORS.white, textDecoration: 'none', borderBottom: '1px solid rgba(255,255,255,0.3)' }}>
+          <a href="#" onClick={(e) => e.preventDefault()} style={{ color: COLORS.white, textDecoration: 'none', borderBottom: `1px solid ${borderRest}` }}>
             Explore a sample dataset
           </a>
         </p>

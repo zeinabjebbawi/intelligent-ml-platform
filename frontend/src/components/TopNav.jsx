@@ -99,6 +99,14 @@ export default function TopNav({ active, onNavigate, furthestOrder = Infinity, t
           padding: '5px 12px', color: C.text, fontSize: 12, fontWeight: 700, cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6,
         }}>{dark ? '🌙' : '☀'} {dark ? 'Dark' : 'Light'}</button>
+        {onNavigate && (
+          <button onClick={() => onNavigate('workspace')} title="Back to your project list" style={{
+            background: 'none', border: `1px solid ${C.border}`, borderRadius: 20,
+            padding: '5px 12px', color: C.muted, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+          }}>
+            ← Workspace
+          </button>
+        )}
         <button onClick={logout} title="Log out" style={{
           background: 'none', border: 'none', fontSize: 15, color: C.muted, cursor: 'pointer', padding: 0, lineHeight: 1,
         }}>👤</button>
