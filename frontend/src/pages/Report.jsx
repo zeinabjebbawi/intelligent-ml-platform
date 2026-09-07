@@ -247,11 +247,6 @@ export default function ReportPage({
               Generated {reportData?.generated_at ? new Date(reportData.generated_at).toLocaleString() : new Date().toLocaleString()}
             </div>
           </div>
-          <button onClick={handlePrint} className="no-print"
-            style={{ padding: '10px 20px', borderRadius: 10, border: `1px solid ${C.border}`,
-              background: C.card, color: C.primary, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-            Print / PDF
-          </button>
         </div>
       </div>
 
@@ -305,11 +300,11 @@ export default function ReportPage({
               {[
                 { title: 'PDF Report', desc: 'Share with supervisors, clients, or as a capstone deliverable. All sections are print-formatted.' },
                 { title: 'Jupyter Notebook', desc: 'Open in Jupyter Lab or VS Code. Run cells top-to-bottom to reproduce the full pipeline from scratch.' },
-                { title: 'Model File (.pkl)', desc: 'Load with pickle.load() in Python. Deploy for batch prediction in any Python environment.' },
+                { title: 'Model File (.pkl)' },
               ].map(e => (
                 <div key={e.title}>
                   <div style={{ fontWeight: 700, fontSize: 12, color: C.text }}>{e.title}</div>
-                  <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.desc}</div>
+                  {e.desc && <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.desc}</div>}
                 </div>
               ))}
             </div>

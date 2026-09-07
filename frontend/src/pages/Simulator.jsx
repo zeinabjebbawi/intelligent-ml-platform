@@ -164,7 +164,7 @@ const WaterfallChart = ({ data }) => {
   const { C } = useTheme()
   if (!data || data.error) return (
     <div style={{ textAlign: 'center', padding: '40px 0', color: C.muted, fontSize: 12.5 }}>
-      {data?.error ? `⚠ SHAP: ${data.error}` : 'Run a prediction to see the waterfall chart.'}
+      {data?.error ? `SHAP: ${data.error}` : 'Run a prediction to see the waterfall chart.'}
     </div>
   )
 
@@ -281,7 +281,6 @@ const PredictionDisplay = ({ prediction, batchData, compact }) => {
   const { C } = useTheme()
   if (!prediction && !batchData) return (
     <div style={{ textAlign: 'center', padding: compact ? '14px 20px' : '50px 20px', color: C.muted }}>
-      <div style={{ fontSize: compact ? 22 : 36, marginBottom: compact ? 6 : 12 }}>🔮</div>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, color: C.text }}>No prediction yet</div>
       <div style={{ fontSize: 11 }}>Adjust sliders on the left, or upload a CSV, to see results here.</div>
     </div>
@@ -299,12 +298,12 @@ const PredictionDisplay = ({ prediction, batchData, compact }) => {
           <a href={`${ML_API}/simulator/download-batch?result_path=${encodeURIComponent(batchData.result_path)}&filename=predictions.csv`}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: C.success, color: 'white',
               fontWeight: 700, fontSize: 12, textDecoration: 'none', display: 'inline-block' }}>
-            ⬇ Download CSV
+            Download CSV
           </a>
         </div>
         {batchData.missing_columns?.length > 0 && (
           <div style={{ fontSize: 11, color: C.warning, background: C.warningSoft, borderRadius: 8, padding: '7px 10px', marginBottom: 10 }}>
-            ⚠ {batchData.missing_columns.length} training feature(s) missing from this file, filled with 0: {batchData.missing_columns.join(', ')}
+            {batchData.missing_columns.length} training feature(s) missing from this file, filled with 0: {batchData.missing_columns.join(', ')}
           </div>
         )}
         <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 10 }}>
@@ -434,7 +433,7 @@ const SingleEntrySection = ({ features, values, onChange, predicting, fillHeight
           )
         })}
       </div>
-      {predicting && <div style={{ fontSize: 11, color: C.primary, marginTop: 6, textAlign: 'center' }}>⏳ Computing…</div>}
+      {predicting && <div style={{ fontSize: 11, color: C.primary, marginTop: 6, textAlign: 'center' }}>Computing…</div>}
     </div>
   )
 }
@@ -462,7 +461,6 @@ const BatchUploadSection = ({ onFile, uploading, batchData }) => {
           background: dragging ? C.primarySoft : C.faint, marginBottom: 12,
         }}>
         <input ref={ref} type="file" accept=".csv" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
-        <div style={{ fontSize: 28, marginBottom: 6 }}>📂</div>
         <div style={{ fontWeight: 700, fontSize: 13, color: dragging ? C.primary : C.text }}>
           {uploading ? 'Processing…' : 'Drop your CSV file here'}
         </div>
@@ -474,14 +472,14 @@ const BatchUploadSection = ({ onFile, uploading, batchData }) => {
       {batchData && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <div style={{ background: C.successSoft, border: `1px solid ${C.success}33`, borderRadius: 8, padding: '8px 12px' }}>
-            <div style={{ fontSize: 10, fontWeight: 800, color: C.success, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>✓ Columns found</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.success, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Columns found</div>
             <div style={{ fontSize: 11, color: C.text }}>
               {batchData.all_columns?.filter(c => !['Predicted', 'Confidence', 'Predicted_Cluster'].includes(c)).slice(0, 4).join(', ')}
               {batchData.all_columns?.length > 4 && '…'}
             </div>
           </div>
           <div style={{ background: C.primarySoft, border: `1px solid ${C.primary}33`, borderRadius: 8, padding: '8px 12px' }}>
-            <div style={{ fontSize: 10, fontWeight: 800, color: C.primary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>🔮 Predicted</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.primary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Predicted</div>
             <div style={{ fontSize: 11, color: C.text }}>
               {batchData.all_columns?.filter(c => ['Predicted', 'Confidence', 'Predicted_Cluster'].includes(c)).join(', ') || '—'}
               <span style={{ color: C.success, marginLeft: 4 }}>· new column</span>
@@ -637,7 +635,7 @@ export default function SimulatorPage({
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: 16, fontWeight: 900, color: C.text }}>Simulator</h1>
           <span style={{ fontSize: 11, color: C.muted }}>
-            📌 Reads the model trained on Train and Test — no new dataset version is created here.
+            Reads the model trained on Train and Test — no new dataset version is created here.
           </span>
         </div>
         {config && (
@@ -654,7 +652,6 @@ export default function SimulatorPage({
 
       {!modelPklPath && (
         <div style={{ textAlign: 'center', padding: '90px 0', color: C.muted, flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          <div style={{ fontSize: 38, marginBottom: 14 }}>🔮</div>
           <div style={{ fontWeight: 800, fontSize: 16, color: C.text, marginBottom: 6 }}>No trained model found</div>
           <div style={{ fontSize: 13, marginBottom: 20 }}>Train a model on the Train and Test page first — the Simulator explores whichever model you trained most recently.</div>
           <button onClick={() => onGoTo && onGoTo('training')}
@@ -675,7 +672,7 @@ export default function SimulatorPage({
 
       {modelPklPath && !loading && error && (
         <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 12,
-          padding: 20, color: C.danger, margin: '24px 32px', fontSize: 13, flex: 1, minHeight: 0, overflowY: 'auto' }}>⚠ {error}</div>
+          padding: 20, color: C.danger, margin: '24px 32px', fontSize: 13, flex: 1, minHeight: 0, overflowY: 'auto' }}>{error}</div>
       )}
 
       {modelPklPath && !loading && !error && config && (
@@ -684,7 +681,7 @@ export default function SimulatorPage({
           {actionError && (
             <div style={{ background: C.dangerSoft, border: `1px solid ${C.danger}`, borderRadius: 10,
               padding: '10px 16px', color: C.danger, fontSize: 13, marginBottom: 10, flexShrink: 0 }}>
-              ⚠ {actionError}
+              {actionError}
             </div>
           )}
 
@@ -693,8 +690,8 @@ export default function SimulatorPage({
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 10, width: 'fit-content', flexShrink: 0,
             background: C.faint, borderRadius: 10, padding: 3, border: `1px solid ${C.border}` }}>
             {[
-              { key: 'single', label: '🎚 Single Entry', info: INFO_SIMULATOR },
-              { key: 'batch', label: '📁 Batch Upload', info: INFO_BATCH },
+              { key: 'single', label: 'Single Entry', info: INFO_SIMULATOR },
+              { key: 'batch', label: 'Upload', info: INFO_BATCH },
             ].map(m => (
               <button key={m.key} onClick={() => setMode(m.key)}
                 style={{ padding: '5px 14px', borderRadius: 7, border: 'none',
@@ -755,8 +752,8 @@ export default function SimulatorPage({
               <div style={{ background: C.card, borderRadius: cardR, padding: '12px 18px', boxShadow: shadow2,
                 border: `1px solid ${C.border}`, borderTop: `3px solid ${C.primary}`, flex: '0 0 auto' }}>
                 <div style={{ fontWeight: 700, fontSize: 12, color: C.text, marginBottom: 8 }}>
-                  {mode === 'batch' ? '📊 Batch Prediction Results' : '🔮 Prediction'}
-                  {predicting && <span style={{ color: C.primary, fontSize: 11, fontWeight: 400, marginLeft: 8 }}>⏳ updating…</span>}
+                  {mode === 'batch' ? 'Batch Prediction Results' : 'Prediction'}
+                  {predicting && <span style={{ color: C.primary, fontSize: 11, fontWeight: 400, marginLeft: 8 }}>updating…</span>}
                 </div>
                 <PredictionDisplay
                   prediction={mode === 'single' ? prediction : batchData?.first_pred?.prediction}
